@@ -44,14 +44,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-se
 .top-bar-right { display: flex; align-items: center; gap: 12px; }
 .icon-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all 0.2s; }
 .icon-btn:hover { background: var(--glass-bg); color: var(--text-primary); }
-.sidebar-toggle-btn { transition: transform 0.3s ease; }
-.sidebar-toggle-btn.rotated { transform: rotate(180deg); }
+/* ===== 侧边栏组：tab + 面板动画一体 ===== */
+.sidebar-group { position: fixed; left: 0; top: 72px; bottom: 100px; display: flex; align-items: stretch; pointer-events: none; z-index: 50; }
+.sidebar-tab-left { pointer-events: all; position: relative; z-index: 2; flex-shrink: 0; align-self: center; width: 20px; height: 128px; background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); border: 0.5px solid var(--glass-border); border-right: none; border-radius: 10px 0 0 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); box-shadow: -3px 0 12px rgba(0,0,0,0.08), inset 1px 0 0 rgba(255,255,255,0.12); transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.sidebar-tab-left:hover { background: rgba(255,255,255,0.45); color: var(--text-primary); box-shadow: -4px 0 16px rgba(0,0,0,0.12), inset 1px 0 0 rgba(255,255,255,0.2); }
+[data-theme="dark"] .sidebar-tab-left { background: rgba(44,44,46,0.55); }
+[data-theme="dark"] .sidebar-tab-left:hover { background: rgba(60,60,62,0.75); }
+.sidebar-tab-left i { font-size: 9px; pointer-events: none; transition: transform 0.32s cubic-bezier(0.4,0,0.2,1); }
+/* 展开态：icon 旋转 180° (> 变 <)，与侧边栏滑动同步触发 */
+.sidebar-group.expanded .sidebar-tab-left i { transform: rotate(180deg); }
 .main-content { position: fixed; top: 52px; left: 0; right: 0; bottom: 80px; overflow-y: auto; padding: 20px; scroll-behavior: smooth; }
 .page { display: none; animation: fadeIn 0.3s ease; }
 .page.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.sidebar { position: fixed; left: 20px; top: 72px; bottom: 100px; width: 240px; background: var(--bg-secondary); backdrop-filter: blur(var(--glass-blur)); border: 0.5px solid var(--glass-border); border-radius: var(--radius-lg); padding: 16px; overflow-y: auto; z-index: 50; transition: transform 0.3s ease, opacity 0.3s ease; }
-.sidebar.collapsed { transform: translateX(-260px); opacity: 0; pointer-events: none; }
+.sidebar { pointer-events: all; position: relative; z-index: 1; flex-shrink: 0; width: 240px; background: var(--bg-secondary); backdrop-filter: blur(var(--glass-blur)); border: 0.5px solid var(--glass-border); border-top-left-radius: 0; border-bottom-left-radius: 0; border-radius: 0 var(--radius-lg) var(--radius-lg) 0; padding: 16px; overflow-y: auto; transition: transform 0.32s cubic-bezier(0.4,0,0.2,1); }
+/* 折叠态：面板向左移出，tab 不动始终可见 */
+.sidebar-group:not(.expanded) .sidebar { transform: translateX(-260px); }
 .sidebar-section { margin-bottom: 16px; }
 .sidebar-section:last-child { margin-bottom: 0; }
 .sidebar-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 8px; padding: 0 4px; display: flex; align-items: center; justify-content: space-between; }
@@ -59,7 +67,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-se
 .sidebar-tag-search input { width: 100%; padding: 7px 10px 7px 30px; border-radius: var(--radius-sm); border: 0.5px solid var(--glass-border); background: var(--glass-bg); font-size: 12px; color: var(--text-primary); outline: none; }
 .sidebar-tag-search input:focus { border-color: var(--accent-blue); }
 .sidebar-tag-search i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 11px; }
-.sidebar-tag-cloud { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 4px; max-height: 120px; overflow-y: auto; }
+.sidebar-tag-cloud { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 4px; }
 .sidebar-tag-item { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 16px; cursor: pointer; font-size: 12px; color: var(--text-secondary); background: var(--glass-bg); border: 0.5px solid transparent; transition: all 0.2s ease; white-space: nowrap; }
 .sidebar-tag-item:hover { border-color: var(--accent-purple); color: var(--text-primary); transform: translateY(-1px); }
 .sidebar-tag-item.active { background: linear-gradient(135deg, var(--accent-gradient-1), var(--accent-gradient-2)); color: white; border-color: transparent; }
@@ -67,8 +75,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-se
 .sidebar-tag-item .count { background: rgba(255,255,255,0.2); padding: 1px 5px; border-radius: 10px; font-size: 10px; }
 .sidebar-tag-item:hover .count { background: rgba(0,0,0,0.1); }
 .sidebar-tag-item.active .count { background: rgba(255,255,255,0.3); }
-.sidebar-tag-more { font-size: 11px; color: var(--accent-blue); cursor: pointer; padding: 6px 8px 0; display: inline-block; }
-.sidebar-tag-more:hover { text-decoration: underline; }
+.sidebar-more-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px 4px 8px; margin-top: 2px; border-radius: 14px; background: var(--glass-bg); border: 0.5px solid var(--glass-border); color: var(--text-secondary); font-size: 11px; font-weight: 500; cursor: pointer; transition: background 0.18s, color 0.18s, border-color 0.18s; white-space: nowrap; }
+.sidebar-more-btn:hover { background: rgba(142,142,147,0.15); color: var(--text-primary); border-color: rgba(142,142,147,0.4); }
+[data-theme="dark"] .sidebar-more-btn:hover { background: rgba(142,142,147,0.18); }
+.sidebar-more-btn i { font-size: 9px; transition: transform 0.22s cubic-bezier(0.4,0,0.2,1); }
 .sidebar-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all 0.2s ease; }
 .sidebar-item:hover { background: var(--glass-bg); color: var(--text-primary); }
 .sidebar-item.active { background: linear-gradient(135deg, rgba(94, 92, 230, 0.2), rgba(191, 90, 242, 0.2)); color: var(--text-primary); }
@@ -117,12 +127,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-se
 .btn-secondary:hover { background: rgba(255,255,255,0.3); }
 .btn-danger { background: rgba(255, 69, 58, 0.15); color: var(--danger); }
 .btn-danger:hover { background: rgba(255, 69, 58, 0.25); }
-.view-toggle { display: flex; gap: 4px; background: var(--glass-bg); padding: 4px; border-radius: var(--radius-sm); }
-.view-btn { width: 32px; height: 32px; border: none; background: transparent; color: var(--text-secondary); border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.view-btn.active { background: var(--accent-blue); color: white; }
+.zoom-ctrl { display: flex; gap: 2px; background: var(--glass-bg); padding: 3px; border-radius: var(--radius-sm); border: 0.5px solid var(--glass-border); }
+.zoom-btn { width: 30px; height: 30px; border: none; background: transparent; color: var(--text-secondary); border-radius: 5px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px; transition: background 0.15s, color 0.15s; }
+.zoom-btn:hover:not(:disabled) { background: rgba(255,255,255,0.2); color: var(--text-primary); }
+.zoom-btn:disabled { opacity: 0.28; cursor: not-allowed; }
 .sort-select { padding: 8px 12px; border-radius: var(--radius-sm); border: 0.5px solid var(--glass-border); background: var(--glass-bg); color: var(--text-primary); font-size: 13px; cursor: pointer; }
-.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
-.photo-card { position: relative; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden; cursor: pointer; background: var(--glass-bg); }
+.score-badge-segment { display: flex; gap: 2px; background: var(--glass-bg); padding: 3px; border-radius: var(--radius-sm); border: 0.5px solid var(--glass-border); backdrop-filter: blur(10px); }
+.segment-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border: none; background: transparent; color: var(--text-secondary); border-radius: 5px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.18s ease; white-space: nowrap; }
+.segment-btn.active { background: linear-gradient(135deg, var(--accent-gradient-1), var(--accent-gradient-2)); color: white; box-shadow: 0 2px 8px rgba(94, 92, 230, 0.35); }
+.segment-btn:not(.active):hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+.photo-grid { display: flex; flex-wrap: wrap; gap: 16px; --photo-col-width: calc(25% - 12px); --photo-card-radius: 12px; }
+.photo-card { position: relative; aspect-ratio: 1; border-radius: var(--photo-card-radius); overflow: hidden; cursor: pointer; background: var(--glass-bg); width: var(--photo-col-width); flex-shrink: 0; transition: width 0.22s cubic-bezier(0.4,0,0.2,1), border-radius 0.22s ease; }
 .photo-card img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
 .photo-card:hover img { transform: scale(1.05); }
 .photo-score { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
@@ -330,6 +345,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-se
 .prompt-task-item.locked .prompt-task-content textarea { color: var(--text-secondary); opacity: 0.9; }
 .prompt-task-lock-note { font-size: 11px; color: var(--danger); }
 .prompt-task-limit { margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+/* ===== iOS 风格 Toggle Switch ===== */
+.ios-toggle { position: relative; display: inline-block; width: 44px; height: 26px; cursor: pointer; }
+.ios-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.ios-toggle-knob { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(120,120,128,0.22); border-radius: 13px; transition: background 0.22s; }
+.ios-toggle-knob::before { content: ''; position: absolute; width: 22px; height: 22px; top: 2px; left: 2px; background: white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.22); transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1); }
+.ios-toggle input:checked + .ios-toggle-knob { background: var(--accent-blue); }
+.ios-toggle input:checked + .ios-toggle-knob::before { transform: translateX(18px); }
+.hover-delay-disabled { opacity: 0.4; pointer-events: none; }
+
 @media (max-width: 980px) {
     .photo-detail-body { grid-template-columns: 1fr; }
 }

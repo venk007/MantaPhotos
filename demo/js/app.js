@@ -59,6 +59,21 @@ var currentDetailPhotoId = null;
 var scoreBadgeMode = 'aesthetic';
 var scoreFilterMetric = 'aesthetics';
 
+// 照片网格尺寸：7级，对应每行列数；level 越大列越多（照片越小）
+// − 按钮 = 缩小(+1 level) ; + 按钮 = 放大(-1 level)
+var gridColLevels = [2, 4, 6, 8, 12, 16, 32];
+var gridGapLevels = [14, 12, 10, 8, 6, 4, 2];
+var gridSizeLevel = 3; // 默认8列
+
+// 侧边栏悬浮触发
+var sidebarHoverEnabled = true;
+var sidebarHoverDelay = 0.5; // 秒，可配置
+var _sidebarHoverTimer = null;
+// 滚动自动隐藏状态
+var _preScrollSidebarVisible = true;  // 滚动前的展开状态
+var _scrollDebounceTimer = null;
+var _scrollHiddenByScroll = false;    // 是否是被滚动隐藏的
+
 var scoreMetricLabels = {
     aesthetics: '美学评分',
     composite: '综合评分',
@@ -68,9 +83,8 @@ var scoreMetricLabels = {
     rarity: '稀有性',
     uniqueness: '独特性'
 };
+// 宠物/夜景已提升为默认可见标签（HTML中），这里只保留"更多"中的扩展标签
 var hiddenSidebarTags = [
-    { tag: '宠物', icon: 'fa-paw', count: 7 },
-    { tag: '夜景', icon: 'fa-moon', count: 6 },
     { tag: '亲子', icon: 'fa-users', count: 3 },
     { tag: '运动', icon: 'fa-person-running', count: 5 },
     { tag: '花草', icon: 'fa-seedling', count: 4 },
@@ -246,26 +260,113 @@ function init() {
     renderSearchPage();
     initSidebarCollapse();
     updateAnalysisProgressUI();
-    updateBadgeScoreModeDisplay();
+    updateBadgeScoreModeDisplay(); // 同时初始化排序选项文案
     updateScoreFilterHint();
     updateFilterPreviewCount();
     updateModelButtons();
+    applyGridSize(); // 初始化网格尺寸
+    // 初始化侧边栏展开状态（默认照片页展开）
+    var group = document.getElementById('sidebarGroup');
+    if (group) group.classList.toggle('expanded', sidebarVisible);
 }
 
 // ========== 侧边栏折叠 ==========
 var sidebarVisible = true;
+
 function initSidebarCollapse() {
-    var toggleBtn = document.getElementById('sidebarToggle');
-    if (toggleBtn) {
-        toggleBtn.addEventListener('click', function() {
-            sidebarVisible = !sidebarVisible;
-            var sidebar = document.getElementById('sidebar');
-            if (sidebar) {
-                sidebar.classList.toggle('collapsed', !sidebarVisible);
+    // tab 的点击/悬浮已在 HTML 声明，这里仅初始化滚动行为
+    initScrollSidebarBehavior();
+}
+
+/** 公开切换：用户手动触发 */
+function toggleSidebar() {
+    setSidebarVisible(!sidebarVisible);
+    // 手动操作后重置"被滚动隐藏"状态
+    _scrollHiddenByScroll = false;
+    _preScrollSidebarVisible = sidebarVisible;
+}
+
+/** 统一状态设置（避免重复操作）*/
+function setSidebarVisible(show) {
+    if (sidebarVisible === show) return;
+    sidebarVisible = show;
+    var group = document.getElementById('sidebarGroup');
+    if (group) group.classList.toggle('expanded', show);
+    var tabLeft = document.getElementById('sidebarTabLeft');
+    if (tabLeft) tabLeft.title = show ? '折叠侧边栏' : '展开侧边栏';
+}
+
+// ========== 滚动自动隐藏 ==========
+function initScrollSidebarBehavior() {
+    var mainContent = document.querySelector('.main-content');
+    if (!mainContent) return;
+    var lastScrollTop = 0;
+
+    mainContent.addEventListener('scroll', function() {
+        var scrollTop = mainContent.scrollTop;
+        var delta = scrollTop - lastScrollTop;
+        lastScrollTop = scrollTop;
+
+        // 任意方向滚动超过 10px 且侧边栏当前可见 → 隐藏
+        if (Math.abs(delta) >= 10 && sidebarVisible) {
+            _preScrollSidebarVisible = true;
+            _scrollHiddenByScroll = true;
+            setSidebarVisible(false);
+        }
+
+        // 滚动停止检测（200ms 防抖）
+        clearTimeout(_scrollDebounceTimer);
+        _scrollDebounceTimer = setTimeout(function() {
+            // 停止后：若是被滚动隐藏的，延迟 500ms 恢复
+            if (_scrollHiddenByScroll && _preScrollSidebarVisible && !sidebarVisible) {
+                setTimeout(function() {
+                    if (_scrollHiddenByScroll && !sidebarVisible) {
+                        _scrollHiddenByScroll = false;
+                        setSidebarVisible(true);
+                    }
+                }, 500);
             }
-            toggleBtn.classList.toggle('rotated', !sidebarVisible);
-        });
+        }, 200);
+    });
+}
+
+// ========== 悬浮触发 ==========
+// 无论展开还是折叠，悬停 n 秒均自动切换到相反状态
+function startSidebarHoverTimer() {
+    if (!sidebarHoverEnabled) return;
+    var delay = sidebarHoverDelay * 1000;
+    var targetVisible = !sidebarVisible; // 切换到相反状态
+    if (delay <= 0) {
+        setSidebarVisible(targetVisible);
+        if (targetVisible) _scrollHiddenByScroll = false;
+        return;
     }
+    _sidebarHoverTimer = setTimeout(function() {
+        // 再次确认状态未被手动改变
+        if (sidebarVisible !== targetVisible) {
+            setSidebarVisible(targetVisible);
+            if (targetVisible) _scrollHiddenByScroll = false;
+        }
+    }, delay);
+}
+
+function cancelSidebarHoverTimer() {
+    clearTimeout(_sidebarHoverTimer);
+    _sidebarHoverTimer = null;
+}
+
+// ========== 悬浮触发设置 ==========
+function onHoverEnabledChange() {
+    var checkbox = document.getElementById('hoverTriggerEnabled');
+    sidebarHoverEnabled = checkbox ? checkbox.checked : true;
+    var delayItem = document.getElementById('hoverDelayItem');
+    if (delayItem) delayItem.classList.toggle('hover-delay-disabled', !sidebarHoverEnabled);
+}
+
+function onHoverDelaySlider(val) {
+    sidebarHoverDelay = parseFloat(val);
+    var display = document.getElementById('hoverDelayDisplay');
+    if (display) display.textContent = (sidebarHoverDelay === 0 ? '即时' : sidebarHoverDelay.toFixed(1) + ' 秒');
 }
 
 function initSidebarTagSearch() {
@@ -289,7 +390,8 @@ function initSidebarExtraTags() {
     var tagCloud = document.getElementById('tagCloud');
     if (!tagCloud) return;
     if (tagCloud.querySelector('.sidebar-tag-item.extra-tag')) return;
-    var moreBtn = tagCloud.querySelector('.sidebar-tag-more');
+    // 扩展标签插在「更多」按钮之前，使展开后更多按钮仍在最末
+    var moreBtn = document.getElementById('sidebarMoreBtn');
     hiddenSidebarTags.forEach(function(item) {
         var el = document.createElement('span');
         el.className = 'sidebar-tag-item extra-tag';
@@ -297,7 +399,8 @@ function initSidebarExtraTags() {
         el.style.display = 'none';
         el.innerHTML = '<i class="fas ' + item.icon + '"></i> ' + item.tag + ' <span class="count">' + item.count + '</span>';
         el.onclick = function() { toggleSidebarTag(el); };
-        tagCloud.insertBefore(el, moreBtn);
+        if (moreBtn) tagCloud.insertBefore(el, moreBtn);
+        else tagCloud.appendChild(el);
     });
 }
 
@@ -441,15 +544,10 @@ function navigateToPage(page) {
         }, 0);
     }
 
-    // 侧边栏
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    if (page === 'photos') {
-        sidebar.style.display = '';
-        sidebarToggle.style.display = '';
-    } else {
-        sidebar.style.display = 'none';
-        sidebarToggle.style.display = 'none';
+    // 侧边栏组（仅在照片页显示；overlay 模式，不影响主内容宽度）
+    var sidebarGroup = document.getElementById('sidebarGroup');
+    if (sidebarGroup) {
+        sidebarGroup.style.display = (page === 'photos') ? '' : 'none';
     }
 }
 
@@ -459,9 +557,11 @@ function getVisiblePhotos() {
         list = applyAdvancedFilters(list);
     }
     if (currentSortMode === 'scoreDesc') {
-        list.sort(function(a, b) { return b.score - a.score; });
+        list.sort(function(a, b) { return getBadgeScore(b) - getBadgeScore(a); });
     } else if (currentSortMode === 'scoreAsc') {
-        list.sort(function(a, b) { return a.score - b.score; });
+        list.sort(function(a, b) { return getBadgeScore(a) - getBadgeScore(b); });
+    } else if (currentSortMode === 'dateAsc') {
+        list.sort(function(a, b) { return a.date.localeCompare(b.date); });
     } else {
         list.sort(function(a, b) { return b.date.localeCompare(a.date); });
     }
@@ -528,6 +628,8 @@ function renderPhotos() {
         return '<div class="photo-card' + (selectedPhotos.has(photo.id) ? ' selected' : '') + '" data-id="' + photo.id + '" onclick="openPhotoDetail(' + photo.id + ')"><img src="' + photo.url + '" alt="照片" loading="lazy"><div class="photo-score ' + scoreClass + '"><i class="fas ' + icon + '"></i> ' + getBadgeScoreLabelPrefix() + ' ' + badgeScore + '</div><div class="photo-checkbox" onclick="togglePhotoSelection(event, ' + photo.id + ')"><i class="fas fa-check"></i></div></div>';
     }).join('');
     updatePhotoCount(visiblePhotos.length);
+    // 渲染后重新应用尺寸（CSS var 在 grid 元素上，DOM 重建后无需重新设置，但 gap 需要）
+    applyGridSize();
 }
 
 function togglePhotoSelection(event, id) {
@@ -551,6 +653,34 @@ function setSortMode(mode) {
     renderPhotos();
     showToast('已更新排序方式');
 }
+
+// ========== 照片网格尺寸调节 ==========
+function applyGridSize() {
+    var cols = gridColLevels[gridSizeLevel];
+    var gap = gridGapLevels[gridSizeLevel];
+    var photoGrid = document.getElementById('photoGrid');
+    if (!photoGrid) return;
+    photoGrid.style.gap = gap + 'px';
+    var colWidth = 'calc((100% - ' + ((cols - 1) * gap) + 'px) / ' + cols + ')';
+    photoGrid.style.setProperty('--photo-col-width', colWidth);
+    // 圆角随列数缩放
+    var radiusMap = { 2: '14px', 4: '12px', 6: '10px', 8: '8px', 12: '6px', 16: '4px', 32: '2px' };
+    photoGrid.style.setProperty('--photo-card-radius', radiusMap[cols] || '8px');
+    // − 按钮：缩小(+level)；在最大列时禁用
+    // + 按钮：放大(-level)；在最小列时禁用
+    var outBtn = document.getElementById('zoomOutBtn');
+    var inBtn = document.getElementById('zoomInBtn');
+    if (outBtn) outBtn.disabled = (gridSizeLevel === gridColLevels.length - 1);
+    if (inBtn) inBtn.disabled = (gridSizeLevel === 0);
+}
+
+function adjustGridSize(delta) {
+    var newLevel = gridSizeLevel + delta;
+    if (newLevel < 0 || newLevel >= gridColLevels.length) return;
+    gridSizeLevel = newLevel;
+    applyGridSize();
+}
+
 
 function openPhotoDetail(id) {
     var photo = photos.find(function(item) { return item.id === id; });
@@ -1100,18 +1230,34 @@ function cycleFirstAnalysisStrategy() {
 }
 
 function updateBadgeScoreModeDisplay() {
-    var valueEl = document.getElementById('badgeScoreModeValue');
-    if (valueEl) {
-        valueEl.textContent = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
+    var aeBtn = document.getElementById('badgeSegAesthetic');
+    var coBtn = document.getElementById('badgeSegComposite');
+    if (aeBtn && coBtn) {
+        aeBtn.classList.toggle('active', scoreBadgeMode === 'aesthetic');
+        coBtn.classList.toggle('active', scoreBadgeMode === 'composite');
     }
+    updateSortScoreLabels();
+}
+
+function updateSortScoreLabels() {
+    var label = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
+    var descOpt = document.getElementById('sortOptScoreDesc');
+    var ascOpt = document.getElementById('sortOptScoreAsc');
+    if (descOpt) descOpt.textContent = '按' + label + '排序（高→低）';
+    if (ascOpt) ascOpt.textContent = '按' + label + '排序（低→高）';
+}
+
+function setBadgeScoreMode(mode) {
+    if (scoreBadgeMode === mode) return;
+    scoreBadgeMode = mode;
+    updateBadgeScoreModeDisplay();
+    renderPhotos(); // 角标与排序（按分时）同步刷新
+    var text = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
+    showToast('角标已切换为：' + text + '  ' + (currentSortMode.startsWith('score') ? '（排序已同步）' : ''));
 }
 
 function cycleBadgeScoreMode() {
-    scoreBadgeMode = scoreBadgeMode === 'aesthetic' ? 'composite' : 'aesthetic';
-    updateBadgeScoreModeDisplay();
-    renderPhotos();
-    var text = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
-    showToast('角标已切换为：' + text);
+    setBadgeScoreMode(scoreBadgeMode === 'aesthetic' ? 'composite' : 'aesthetic');
 }
 
 // ========== 主题切换 ==========
@@ -1307,19 +1453,26 @@ function showMoreTags() {
     areExtraTagsVisible = !areExtraTagsVisible;
     var input = document.getElementById('tagSearch');
     var keyword = input ? input.value.trim().toLowerCase() : '';
+    var tagCloud = document.getElementById('tagCloud');
+    var moreBtn = document.getElementById('sidebarMoreBtn');
+
+    // 显示/隐藏扩展标签
     document.querySelectorAll('#tagCloud .sidebar-tag-item.extra-tag').forEach(function(item) {
         var tag = item.dataset.tag || '';
         var visible = areExtraTagsVisible;
-        if (keyword) {
-            visible = tag.toLowerCase().indexOf(keyword) !== -1;
-        }
+        if (keyword) { visible = tag.toLowerCase().indexOf(keyword) !== -1; }
         item.style.display = visible ? '' : 'none';
     });
-    var moreBtn = document.querySelector('#tagCloud .sidebar-tag-more');
-    if (moreBtn) {
-        moreBtn.textContent = areExtraTagsVisible ? '收起' : '更多...';
+
+    // 更多：按钮移到最末尾（展开后收起在底部）；收起：按钮回到初始位
+    if (moreBtn && tagCloud) {
+        tagCloud.appendChild(moreBtn); // 始终追加到最末，展开前已在末尾，展开后新tag插入其前
     }
-    showToast(areExtraTagsVisible ? '已展示更多标签' : '已收起扩展标签');
+
+    var icon = document.getElementById('sidebarMoreIcon');
+    var text = document.getElementById('sidebarMoreText');
+    if (icon) icon.className = areExtraTagsVisible ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
+    if (text) text.textContent = areExtraTagsVisible ? '收起' : '更多';
 }
 function toggleFilterChip(el) {
     el.classList.toggle('active');

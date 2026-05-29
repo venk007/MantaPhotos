@@ -13,9 +13,6 @@
     <!-- 顶部导航栏 -->
     <header class="top-bar">
         <div class="top-bar-left">
-            <button class="icon-btn sidebar-toggle-btn" id="sidebarToggle" title="折叠侧边栏">
-                <i class="fas fa-chevron-left"></i>
-            </button>
             <div class="app-logo">
                 <i class="fas fa-camera"></i>
                 <span>MantaPhotos</span>
@@ -35,8 +32,18 @@
         </div>
     </header>
 
-    <!-- 侧边栏 -->
-    <aside class="sidebar" id="sidebar">
+    <!-- 侧边栏组：左侧 tab + 面板作为一个动画单元 -->
+    <div class="sidebar-group expanded" id="sidebarGroup">
+        <!-- 左侧折叠/展开 tab -->
+        <button class="sidebar-tab-left" id="sidebarTabLeft"
+                title="展开/折叠侧边栏"
+                onclick="toggleSidebar()"
+                onmouseenter="startSidebarHoverTimer()"
+                onmouseleave="cancelSidebarHoverTimer()">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+        <!-- 侧边栏面板 -->
+        <aside class="sidebar" id="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">标签筛选</div>
             <div class="sidebar-tag-search">
@@ -50,7 +57,12 @@
                 <span class="sidebar-tag-item" data-tag="建筑" onclick="toggleSidebarTag(this)"><i class="fas fa-building"></i> 建筑 <span class="count">6</span></span>
                 <span class="sidebar-tag-item" data-tag="美食" onclick="toggleSidebarTag(this)"><i class="fas fa-utensils"></i> 美食 <span class="count">5</span></span>
                 <span class="sidebar-tag-item" data-tag="旅行" onclick="toggleSidebarTag(this)"><i class="fas fa-plane"></i> 旅行 <span class="count">4</span></span>
-                <span class="sidebar-tag-more" onclick="showMoreTags()">更多...</span>
+                <span class="sidebar-tag-item" data-tag="宠物" onclick="toggleSidebarTag(this)"><i class="fas fa-paw"></i> 宠物 <span class="count">7</span></span>
+                <span class="sidebar-tag-item" data-tag="夜景" onclick="toggleSidebarTag(this)"><i class="fas fa-moon"></i> 夜景 <span class="count">6</span></span>
+                <button class="sidebar-more-btn" id="sidebarMoreBtn" onclick="showMoreTags()">
+                    <i class="fas fa-chevron-down" id="sidebarMoreIcon"></i>
+                    <span id="sidebarMoreText">更多</span>
+                </button>
             </div>
         </div>
         <div class="sidebar-section">
@@ -74,7 +86,8 @@
                 </div>
             </div>
         </div>
-    </aside>
+        </aside><!-- /.sidebar -->
+    </div><!-- /.sidebar-group -->
 
     <!-- 主内容区 -->
     <main class="main-content">
@@ -86,14 +99,23 @@
                     <span class="photo-count" id="photoCount">48 张照片</span>
                 </div>
                 <div class="page-actions">
-                    <div class="view-toggle">
-                        <button class="view-btn active"><i class="fas fa-th-large"></i></button>
-                        <button class="view-btn"><i class="fas fa-list"></i></button>
+                    <div class="zoom-ctrl" title="调节照片尺寸">
+                        <button class="zoom-btn" id="zoomOutBtn" onclick="adjustGridSize(1)" title="缩小（更多列）"><i class="fas fa-minus"></i></button>
+                        <button class="zoom-btn" id="zoomInBtn" onclick="adjustGridSize(-1)" title="放大（更少列）"><i class="fas fa-plus"></i></button>
+                    </div>
+                    <div class="score-badge-segment" title="切换角标评分类型">
+                        <button class="segment-btn active" id="badgeSegAesthetic" onclick="setBadgeScoreMode('aesthetic')">
+                            <i class="fas fa-camera-retro"></i> 美学
+                        </button>
+                        <button class="segment-btn" id="badgeSegComposite" onclick="setBadgeScoreMode('composite')">
+                            <i class="fas fa-chart-line"></i> 综合
+                        </button>
                     </div>
                     <select class="sort-select" id="sortSelect" onchange="setSortMode(this.value)">
-                        <option value="dateDesc">按时间排序（新到旧）</option>
-                        <option value="scoreDesc">按综合评分排序（高到低）</option>
-                        <option value="scoreAsc">按综合评分排序（低到高）</option>
+                        <option value="dateDesc">按时间排序（新→旧）</option>
+                        <option value="dateAsc">按时间排序（旧→新）</option>
+                        <option value="scoreDesc" id="sortOptScoreDesc">按美学评分排序（高→低）</option>
+                        <option value="scoreAsc" id="sortOptScoreAsc">按美学评分排序（低→高）</option>
                     </select>
                     <button class="btn btn-primary" onclick="startAnalysis()"><i class="fas fa-play"></i> AI 分析</button>
                 </div>
@@ -359,19 +381,6 @@
                         <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
                     </div>
                 </div>
-                <div class="settings-item" onclick="cycleBadgeScoreMode()">
-                    <div class="settings-item-left">
-                        <div class="settings-item-icon"><i class="fas fa-star-half-alt"></i></div>
-                        <div class="settings-item-text">
-                            <h4>照片角标分数显示</h4>
-                            <p>控制照片卡片角标显示美学评分或综合评分</p>
-                        </div>
-                    </div>
-                    <div class="settings-item-right">
-                        <span class="settings-value" id="badgeScoreModeValue">美学评分</span>
-                        <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
-                    </div>
-                </div>
                 <div class="settings-item" onclick="openWeightConfig()">
                     <div class="settings-item-left">
                         <div class="settings-item-icon"><i class="fas fa-balance-scale"></i></div>
@@ -391,6 +400,40 @@
                         </div>
                     </div>
                     <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
+                </div>
+            </div>
+                <div class="settings-group">
+                <div class="settings-group-title">交互设置</div>
+                <div class="settings-item">
+                    <div class="settings-item-left">
+                        <div class="settings-item-icon"><i class="fas fa-hand-pointer"></i></div>
+                        <div class="settings-item-text">
+                            <h4>侧边栏按钮悬停自动触发</h4>
+                            <p>鼠标悬停在照片页侧边栏的展开/折叠按钮上，停留指定时间后自动切换</p>
+                        </div>
+                    </div>
+                    <div class="settings-item-right">
+                        <label class="ios-toggle">
+                            <input type="checkbox" id="hoverTriggerEnabled" checked onchange="onHoverEnabledChange()">
+                            <span class="ios-toggle-knob"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="settings-item" id="hoverDelayItem">
+                    <div class="settings-item-left">
+                        <div class="settings-item-icon"><i class="fas fa-stopwatch"></i></div>
+                        <div class="settings-item-text">
+                            <h4>悬停触发等待时长</h4>
+                            <p>鼠标停留多久后自动展开或折叠（0 = 即时响应）</p>
+                        </div>
+                    </div>
+                    <div class="settings-item-right" style="gap:12px; flex:1; justify-content:flex-end;">
+                        <input type="range" min="0" max="3" step="0.1" value="0.5"
+                               id="hoverDelaySlider"
+                               style="width:100px; accent-color:var(--accent-purple);"
+                               oninput="onHoverDelaySlider(this.value)">
+                        <span class="settings-value" id="hoverDelayDisplay">0.5 秒</span>
+                    </div>
                 </div>
             </div>
         </div>
