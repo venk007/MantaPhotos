@@ -34,30 +34,38 @@ var timelineData = [
 var currentPage = 'photos';
 var selectMode = false;
 var selectedPhotos = new Set();
-var currentDateRange = null;
-var currentFilter = 'all';
-var scoreFilterOperator = 'gt';
-var scoreThreshold = 60;
 var activeSidebarTag = 'all';
 var activeQuickFilter = 'none';
-var activeFilterOptions = {
-    isProDevice: false,
-    isProEdited: false,
-    isDuplicate: false,
-    isNewMonth: false,
-    isICloud: false
-};
-var isAdvancedFilterApplied = false;
 var currentModel = 'Qwen3-VL-4B';
 var pendingDeleteIds = [];
 var firstAnalysisStrategies = ['仅今年', '近三年', '全量'];
 var firstAnalysisStrategyIndex = 0;
 var currentSortMode = 'dateDesc';
-var currentSearchQuery = '';
-var currentSearchResults = [];
 var currentDetailPhotoId = null;
 var scoreBadgeMode = 'aesthetic';
-var scoreFilterMetric = 'aesthetics';
+
+// ========== 统一「查找」状态（搜索 + 筛选合一） ==========
+function createEmptyFindState() {
+    return {
+        query: '',
+        mediaTypes: [],   // ['photo','video','live','screenshot','raw']
+        devices: [],      // 设备来源：['Pocket','运动相机','无人机','单反相机']
+        scoreCond: { metric: 'aesthetics', op: 'gt', value: 0 }, // 单条实时评分条件；默认 美学>0 即不过滤
+        dateRange: null,  // {start,end} | {holidays:true}
+        dateLabel: '',
+        locations: [],
+        people: [],
+        tags: [],
+        favorite: false,
+        isProDevice: false,
+        isProEdited: false,
+        isDuplicate: false,
+        isNewMonth: false,
+        isICloud: false
+    };
+}
+var findState = createEmptyFindState();
+var findAppliedToWall = false;   // 查找条件是否已投射到照片墙
 
 // 照片网格尺寸：7级，对应每行列数；level 越大列越多（照片越小）
 // − 按钮 = 缩小(+1 level) ; + 按钮 = 放大(-1 level)
@@ -108,6 +116,7 @@ var photos = [];
 var tagPool = ['风景', '人物', '建筑', '美食', '旅行', '宠物', '夜景'];
 var locationPool = ['北京', '上海', '厦门', '南京', '杭州', '三亚', '成都', '西安', '广州', '深圳'];
 var friendPool = ['小林', '阿泽', 'Mia', '可可', '安妮', '家人'];
+var peoplePool = ['小林', '阿泽', 'Mia', '可可', '安妮'];
 var moodPool = ['轻松', '兴奋', '平静', '满足', '惊喜', '治愈'];
 var beforeActivityPool = ['早起散步', '在咖啡店规划路线', '逛了当地早市', '从博物馆出来', '刚结束一段车程'];
 var afterActivityPool = ['去附近餐馆补给', '继续下一段城市漫步', '回到酒店整理照片', '和朋友复盘当天行程', '赶去看夜景'];
@@ -208,6 +217,35 @@ for (var i = 1; i <= 48; i++) {
     var afterActivity = afterActivityPool[Math.floor(Math.random() * afterActivityPool.length)];
     var tripDay = Math.floor(Math.random() * 7) + 1;
     var tags = isScreenshot ? ['截图', firstTag] : [firstTag, secondTag];
+    var mediaType;
+    if (isScreenshot) {
+        mediaType = 'screenshot';
+    } else {
+        var mr = Math.random();
+        if (mr < 0.12) mediaType = 'video';
+        else if (mr < 0.22) mediaType = 'live';
+        else if (mr < 0.30) mediaType = 'raw';
+        else mediaType = 'photo';
+    }
+    var people = [];
+    if (!isScreenshot && Math.random() < 0.55) {
+        var peopleCount = Math.random() < 0.5 ? 1 : 2;
+        for (var pp = 0; pp < peopleCount; pp++) {
+            var personName = peoplePool[Math.floor(Math.random() * peoplePool.length)];
+            if (people.indexOf(personName) === -1) people.push(personName);
+        }
+    }
+    var deviceType;
+    if (isScreenshot) {
+        deviceType = '手机';
+    } else {
+        var dr = Math.random();
+        if (dr < 0.45) deviceType = '手机';
+        else if (dr < 0.65) deviceType = '单反相机';
+        else if (dr < 0.80) deviceType = '运动相机';
+        else if (dr < 0.92) deviceType = '无人机';
+        else deviceType = 'Pocket';
+    }
     var contentDescription = buildContentDescription({
         isScreenshot: isScreenshot,
         tags: tags,
@@ -235,6 +273,7 @@ for (var i = 1; i <= 48; i++) {
         location: photoLocation,
         tags: tags,
         isProDevice: isProDevice,
+        deviceType: deviceType,
         isProEdited: Math.random() < 0.25,
         isDuplicate: isDuplicate,
         duplicateGroup: duplicateGroup,
@@ -242,6 +281,8 @@ for (var i = 1; i <= 48; i++) {
         isNewMonth: Math.random() < 0.2,
         isICloud: isICloud,
         isFavorite: Math.random() < 0.3,
+        mediaType: mediaType,
+        people: people,
         dimensions: dimensions,
         contentDescription: contentDescription,
         photoDiary: photoDiary
@@ -251,18 +292,16 @@ for (var i = 1; i <= 48; i++) {
 
 // ========== 初始化 ==========
 function init() {
+    initTheme();
     initNavigation();
     initSidebarExtraTags();
     initSidebarTagSearch();
     initTimelineYearOptions();
     renderPhotos();
     renderReports();
-    renderSearchPage();
     initSidebarCollapse();
     updateAnalysisProgressUI();
     updateBadgeScoreModeDisplay(); // 同时初始化排序选项文案
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
     updateModelButtons();
     applyGridSize(); // 初始化网格尺寸
     // 初始化侧边栏展开状态（默认照片页展开）
@@ -417,8 +456,8 @@ function toggleSidebarTag(el) {
         item.classList.toggle('active', item === el);
     });
     if (currentPage !== 'photos') navigateToPage('photos');
-    isAdvancedFilterApplied = false;
-    updateFilterPreviewCount();
+    findAppliedToWall = false;
+    updateFindBanner();
     renderPhotos();
     updateMultiSelectToolbar();
     showToast(tag === 'all' ? '已切换：全部标签' : ('已切换标签：' + tag));
@@ -433,10 +472,10 @@ function applyQuickFilter(type) {
     document.querySelectorAll('.sidebar-item[data-quick]').forEach(function(item) {
         item.classList.toggle('active', item.dataset.quick === type);
     });
-    isAdvancedFilterApplied = false;
+    findAppliedToWall = false;
     if (currentPage !== 'photos') navigateToPage('photos');
     selectedPhotos.clear();
-    updateFilterPreviewCount();
+    updateFindBanner();
     renderPhotos();
     updateMultiSelectToolbar();
     var textMap = {
@@ -512,6 +551,7 @@ function initNavigation() {
         });
     });
     document.querySelectorAll('.nav-item').forEach(function(item) {
+        if (!item.dataset.page) return; // 查找入口无 data-page，由 onclick 唤起浮层
         item.addEventListener('click', function() {
             var page = item.dataset.page;
             navigateToPage(page);
@@ -533,16 +573,8 @@ function navigateToPage(page) {
 
     // 渲染页面内容
     if (page === 'timeline') renderTimeline();
-    if (page === 'search') renderSearchPage();
     if (page === 'reports') renderReports();
-    if (page === 'filter') renderFilterPage();
     if (page === 'settings') renderSettings();
-    if (page === 'search') {
-        window.setTimeout(function() {
-            var input = document.getElementById('searchInput');
-            if (input) input.focus();
-        }, 0);
-    }
 
     // 侧边栏组（仅在照片页显示；overlay 模式，不影响主内容宽度）
     var sidebarGroup = document.getElementById('sidebarGroup');
@@ -553,8 +585,8 @@ function navigateToPage(page) {
 
 function getVisiblePhotos() {
     var list = getBasePhotosForFilter();
-    if (isAdvancedFilterApplied) {
-        list = applyAdvancedFilters(list);
+    if (findAppliedToWall) {
+        list = computeFindFilter(list);
     }
     if (currentSortMode === 'scoreDesc') {
         list.sort(function(a, b) { return getBadgeScore(b) - getBadgeScore(a); });
@@ -585,24 +617,42 @@ function getBasePhotosForFilter() {
     return list;
 }
 
-function applyAdvancedFilters(list) {
+// 统一查找过滤：自然语言 query 与所有属性芯片以 AND 叠加
+function computeFindFilter(list) {
+    var s = findState;
     return list.filter(function(photo) {
-        if (!matchesScoreFilter(photo)) return false;
-
-        if (currentDateRange) {
-            if (currentDateRange.holidays) {
+        if (s.mediaTypes.length && s.mediaTypes.indexOf(photo.mediaType) === -1) return false;
+        if (s.devices.length && s.devices.indexOf(photo.deviceType) === -1) return false;
+        if (s.favorite && !photo.isFavorite) return false;
+        if (s.locations.length && s.locations.indexOf(photo.location) === -1) return false;
+        if (s.people.length) {
+            var hitPerson = (photo.people || []).some(function(p) { return s.people.indexOf(p) !== -1; });
+            if (!hitPerson) return false;
+        }
+        if (s.tags.length) {
+            var hitTag = s.tags.some(function(t) { return photo.tags.indexOf(t) !== -1; });
+            if (!hitTag) return false;
+        }
+        if (s.isProDevice && !photo.isProDevice) return false;
+        if (s.isProEdited && !photo.isProEdited) return false;
+        if (s.isDuplicate && !photo.isDuplicate) return false;
+        if (s.isNewMonth && !photo.isNewMonth) return false;
+        if (s.isICloud && !photo.isICloud) return false;
+        if (isScoreCondActive(s.scoreCond)) {
+            var c = s.scoreCond;
+            var sc = getMetricScore(photo, c.metric);
+            if (c.op === 'gt' && !(sc > c.value)) return false;
+            if (c.op === 'lt' && !(sc < c.value)) return false;
+        }
+        if (s.dateRange) {
+            if (s.dateRange.holidays) {
                 var month = new Date(photo.date).getMonth() + 1;
                 if ([1, 5, 10].indexOf(month) === -1) return false;
-            } else if (currentDateRange.start && currentDateRange.end) {
-                if (photo.date < currentDateRange.start || photo.date > currentDateRange.end) return false;
+            } else if (s.dateRange.start && s.dateRange.end) {
+                if (photo.date < s.dateRange.start || photo.date > s.dateRange.end) return false;
             }
         }
-
-        if (activeFilterOptions.isProDevice && !photo.isProDevice) return false;
-        if (activeFilterOptions.isProEdited && !photo.isProEdited) return false;
-        if (activeFilterOptions.isDuplicate && !photo.isDuplicate) return false;
-        if (activeFilterOptions.isNewMonth && !photo.isNewMonth) return false;
-        if (activeFilterOptions.isICloud && !photo.isICloud) return false;
+        if (s.query && !matchesQuery(photo, s.query)) return false;
         return true;
     });
 }
@@ -891,99 +941,391 @@ function generateReport() { showToast('正在生成报告...'); setTimeout(funct
 function openReport(id) { showToast('打开报告 ' + id); }
 function deleteReport(id) { showToast('删除报告 ' + id); }
 
-// ========== 搜索 ==========
-function renderSearchPage() {
-    renderHotSearchSuggestions();
-    renderSearchResults(currentSearchResults, currentSearchQuery);
+// ========== 统一「查找」浮层（搜索 + 筛选合一） ==========
+var mediaTypeDefs = [
+    { key: 'photo', label: '照片', icon: 'fa-image' },
+    { key: 'video', label: '视频', icon: 'fa-video' },
+    { key: 'live', label: 'Live', icon: 'fa-bolt' },
+    { key: 'screenshot', label: '截图', icon: 'fa-mobile-screen-button' },
+    { key: 'raw', label: 'RAW', icon: 'fa-file' }
+];
+var statusDefs = [
+    { key: 'favorite', label: '收藏', icon: 'fa-heart' },
+    { key: 'isDuplicate', label: '重复/相似', icon: 'fa-copy' },
+    { key: 'isNewMonth', label: '近一月新增', icon: 'fa-clock' },
+    { key: 'isICloud', label: '已存 iCloud', icon: 'fa-cloud' },
+    { key: 'isProDevice', label: '专业设备', icon: 'fa-camera-retro' },
+    { key: 'isProEdited', label: '专业软件调整', icon: 'fa-magic' }
+];
+// 设备来源（多选，匹配 photo.deviceType）。icon 含完整样式前缀（fas/fab）
+var deviceDefs = [
+    { key: 'Pocket', label: 'Pocket', icon: 'fab fa-get-pocket' },
+    { key: '运动相机', label: '运动相机', icon: 'fas fa-person-running' },
+    { key: '无人机', label: '无人机', icon: 'fas fa-helicopter' },
+    { key: '单反相机', label: '单反相机', icon: 'fas fa-camera' }
+];
+var deviceTypePool = ['手机', '单反相机', '运动相机', '无人机', 'Pocket'];
+var metricShortLabels = {
+    aesthetics: '美学', composite: '综合', technical: '技术',
+    content: '内容', emotion: '情感', rarity: '稀有', uniqueness: '独特'
+};
+
+function mediaLabel(key) {
+    var def = mediaTypeDefs.find(function(m) { return m.key === key; });
+    return def ? def.label : key;
+}
+function metricShort(metric) { return metricShortLabels[metric] || metric; }
+
+// ----- 打开 / 关闭 -----
+// 查找浮层打开时：以照片页为实时画布，浮层只承载筛选控件与计数，照片墙随条件实时更新
+function openFind() {
+    // 切到照片页作为实时结果画布，并清空侧边栏标签/快捷筛选，让查找成为唯一筛选维度
+    activeSidebarTag = 'all';
+    activeQuickFilter = 'none';
+    document.querySelectorAll('#tagCloud .sidebar-tag-item').forEach(function(item) {
+        item.classList.toggle('active', item.dataset.tag === 'all');
+    });
+    document.querySelectorAll('.sidebar-item[data-quick]').forEach(function(item) {
+        item.classList.remove('active');
+    });
+    selectedPhotos.clear();
+    navigateToPage('photos');
+    // 隐藏照片页侧边栏，给实时照片墙一个干净画布
+    var sidebarGroup = document.getElementById('sidebarGroup');
+    if (sidebarGroup) sidebarGroup.style.display = 'none';
+
+    findAppliedToWall = true; // 浮层开启期间照片墙始终反映当前条件
+    renderFindFilters();
+    syncFindScoreEditor();
+    runFind();
+
+    var ov = document.getElementById('findOverlay');
+    if (ov) ov.classList.add('show');
+    window.setTimeout(function() {
+        var input = document.getElementById('findInput');
+        if (input) input.focus();
+    }, 60);
+}
+function closeFind() {
+    var ov = document.getElementById('findOverlay');
+    if (ov) ov.classList.remove('show');
+    // 关闭后：有条件则保留在照片墙生效并显示横幅，无条件则恢复全部
+    findAppliedToWall = findHasConditions();
+    var sidebarGroup = document.getElementById('sidebarGroup');
+    if (sidebarGroup) sidebarGroup.style.display = (currentPage === 'photos') ? '' : 'none';
+    renderPhotos();
+    updateFindBanner();
+    updateMultiSelectToolbar();
+}
+function isFindOpen() {
+    var ov = document.getElementById('findOverlay');
+    return !!(ov && ov.classList.contains('show'));
 }
 
-function pickRandomHotSearches(limit) {
-    var shuffled = hotSearchPool.slice().sort(function() { return Math.random() - 0.5; });
-    return shuffled.slice(0, limit);
+// ----- 自然语言输入 -----
+function onFindQueryInput() {
+    var input = document.getElementById('findInput');
+    findState.query = input ? input.value.trim() : '';
+    runFind();
+}
+function clearFindQuery() {
+    findState.query = '';
+    var input = document.getElementById('findInput');
+    if (input) { input.value = ''; input.focus(); }
+    runFind();
 }
 
-function renderHotSearchSuggestions() {
-    var container = document.getElementById('hotSearchList');
-    if (!container) return;
-    var items = pickRandomHotSearches(3);
-    container.innerHTML = items.map(function(item) {
-        return '<div class="suggestion-item" onclick="applySearchSuggestion(\'' + item.text.replace(/'/g, '\\\'') + '\')"><i class="fas ' + item.icon + '"></i><span>' + item.text + '</span></div>';
+// ----- 渲染筛选芯片 -----
+function renderFindFilters() {
+    renderFindMediaChips();
+    renderFindLocationChips();
+    renderFindPeopleChips();
+    renderFindTagChips();
+    renderFindStatusChips();
+}
+
+// 评分条件是否构成实际过滤（默认 美学>0 不过滤）
+function isScoreCondActive(c) {
+    if (!c) return false;
+    return !(c.op === 'gt' && c.value <= 0);
+}
+
+function countPhotos(predicate) { return photos.filter(predicate).length; }
+
+function renderFindMediaChips() {
+    var c = document.getElementById('findMediaChips');
+    if (!c) return;
+    c.innerHTML = mediaTypeDefs.map(function(m) {
+        var n = countPhotos(function(p) { return p.mediaType === m.key; });
+        var active = findState.mediaTypes.indexOf(m.key) !== -1;
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindMedia(\'' + m.key + '\')"><i class="fas ' + m.icon + '"></i> ' + m.label + ' <span class="count">' + n + '</span></button>';
     }).join('');
 }
-
-function showSearchSuggestions() {
-    renderHotSearchSuggestions();
-    var panel = document.getElementById('searchSuggestions');
-    if (panel) panel.classList.add('show');
+function toggleFindMedia(key) {
+    var i = findState.mediaTypes.indexOf(key);
+    if (i === -1) findState.mediaTypes.push(key); else findState.mediaTypes.splice(i, 1);
+    renderFindMediaChips();
+    runFind();
 }
 
-function hideSearchSuggestions() {
-    window.setTimeout(function() {
-        var panel = document.getElementById('searchSuggestions');
-        if (panel) panel.classList.remove('show');
-    }, 120);
+function renderFindLocationChips() {
+    var c = document.getElementById('findLocationChips');
+    if (!c) return;
+    c.innerHTML = locationPool.map(function(loc) {
+        var n = countPhotos(function(p) { return p.location === loc; });
+        if (n === 0) return '';
+        var active = findState.locations.indexOf(loc) !== -1;
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindLocation(\'' + loc + '\')">' + loc + ' <span class="count">' + n + '</span></button>';
+    }).join('');
+}
+function toggleFindLocation(loc) {
+    var i = findState.locations.indexOf(loc);
+    if (i === -1) findState.locations.push(loc); else findState.locations.splice(i, 1);
+    renderFindLocationChips();
+    runFind();
 }
 
-function applySearchSuggestion(text) {
-    var input = document.getElementById('searchInput');
+function renderFindPeopleChips() {
+    var c = document.getElementById('findPeopleChips');
+    if (!c) return;
+    c.innerHTML = peoplePool.map(function(person) {
+        var n = countPhotos(function(p) { return (p.people || []).indexOf(person) !== -1; });
+        if (n === 0) return '';
+        var active = findState.people.indexOf(person) !== -1;
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindPerson(\'' + person + '\')"><i class="fas fa-user"></i> ' + person + ' <span class="count">' + n + '</span></button>';
+    }).join('');
+}
+function toggleFindPerson(person) {
+    var i = findState.people.indexOf(person);
+    if (i === -1) findState.people.push(person); else findState.people.splice(i, 1);
+    renderFindPeopleChips();
+    runFind();
+}
+
+function renderFindTagChips() {
+    var c = document.getElementById('findTagChips');
+    if (!c) return;
+    c.innerHTML = tagPool.map(function(tag) {
+        var n = countPhotos(function(p) { return p.tags.indexOf(tag) !== -1; });
+        var active = findState.tags.indexOf(tag) !== -1;
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindTag(\'' + tag + '\')">' + tag + ' <span class="count">' + n + '</span></button>';
+    }).join('');
+}
+function toggleFindTag(tag) {
+    var i = findState.tags.indexOf(tag);
+    if (i === -1) findState.tags.push(tag); else findState.tags.splice(i, 1);
+    renderFindTagChips();
+    runFind();
+}
+
+function renderFindStatusChips() {
+    var c = document.getElementById('findStatusChips');
+    if (!c) return;
+    c.innerHTML = statusDefs.map(function(s) {
+        var active = !!findState[s.key];
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindStatus(\'' + s.key + '\')"><i class="fas ' + s.icon + '"></i> ' + s.label + '</button>';
+    }).join('');
+    renderFindDeviceChips();
+}
+function toggleFindStatus(key) {
+    findState[key] = !findState[key];
+    renderFindStatusChips();
+    runFind();
+}
+function renderFindDeviceChips() {
+    var c = document.getElementById('findDeviceChips');
+    if (!c) return;
+    c.innerHTML = deviceDefs.map(function(d) {
+        var n = countPhotos(function(p) { return p.deviceType === d.key; });
+        var active = findState.devices.indexOf(d.key) !== -1;
+        return '<button class="find-chip' + (active ? ' active' : '') + '" onclick="toggleFindDevice(\'' + d.key + '\')"><i class="' + d.icon + '"></i> ' + d.label + ' <span class="count">' + n + '</span></button>';
+    }).join('');
+}
+function toggleFindDevice(key) {
+    var i = findState.devices.indexOf(key);
+    if (i === -1) findState.devices.push(key); else findState.devices.splice(i, 1);
+    renderFindDeviceChips();
+    runFind();
+}
+
+// ----- 评分条件（单条实时生效，无需「添加」） -----
+function setFindScoreEditorMetric(metric) {
+    findState.scoreCond.metric = metric;
+    document.querySelectorAll('#findScoreMetricChips .score-dimension-chip').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.editorMetric === metric);
+    });
+    updateFindScoreHint();
+    runFind();
+}
+function setFindScoreEditorOp(op) {
+    findState.scoreCond.op = op;
+    document.querySelectorAll('.find-score-editor .score-op-chip').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.editorOp === op);
+    });
+    updateFindScoreSliderVisual();
+    updateFindScoreHint();
+    runFind();
+}
+function onFindScoreSliderInput() {
+    var slider = document.getElementById('findScoreSlider');
+    var input = document.getElementById('findScoreValue');
+    if (!slider) return;
+    findState.scoreCond.value = parseInt(slider.value, 10) || 0;
+    if (input) input.value = findState.scoreCond.value;
+    updateFindScoreSliderVisual();
+    updateFindScoreHint();
+    runFind();
+}
+function onFindScoreNumberInput() {
+    var slider = document.getElementById('findScoreSlider');
+    var input = document.getElementById('findScoreValue');
     if (!input) return;
-    input.value = text;
-    handleSearchInput();
+    var val = Math.min(100, Math.max(0, parseInt(input.value, 10) || 0));
+    findState.scoreCond.value = val;
+    if (slider) slider.value = val;
+    updateFindScoreSliderVisual();
+    updateFindScoreHint();
+    runFind();
 }
-
-function clearSearch() {
-    currentSearchQuery = '';
-    currentSearchResults = [];
-    var input = document.getElementById('searchInput');
-    if (input) input.value = '';
-    var clearBtn = document.getElementById('searchClear');
-    if (clearBtn) clearBtn.style.display = 'none';
-    renderSearchResults([], '');
-    showToast('已清空搜索条件');
-}
-
-function handleSearchInput() {
-    var input = document.getElementById('searchInput');
-    if (!input) return;
-    var query = input.value.trim();
-    currentSearchQuery = query;
-    var clearBtn = document.getElementById('searchClear');
-    if (clearBtn) clearBtn.style.display = query ? '' : 'none';
-    if (!query) {
-        currentSearchResults = [];
-        renderSearchResults([], '');
-        return;
+function updateFindScoreSliderVisual() {
+    var slider = document.getElementById('findScoreSlider');
+    if (!slider) return;
+    var min = Number(slider.min || 0);
+    var max = Number(slider.max || 100);
+    var val = findState.scoreCond.value;
+    var percent = ((val - min) / (max - min)) * 100;
+    var activeStart = 'var(--accent-gradient-1)';
+    var activeEnd = 'var(--accent-gradient-2)';
+    var inactive = 'var(--glass-bg)';
+    if (findState.scoreCond.op === 'lt') {
+        slider.style.background = 'linear-gradient(90deg, ' + activeStart + ' 0%, ' + activeEnd + ' ' + percent + '%, ' + inactive + ' ' + percent + '%, ' + inactive + ' 100%)';
+    } else {
+        slider.style.background = 'linear-gradient(90deg, ' + inactive + ' 0%, ' + inactive + ' ' + percent + '%, ' + activeStart + ' ' + percent + '%, ' + activeEnd + ' 100%)';
     }
-    currentSearchResults = searchPhotos(query);
-    renderSearchResults(currentSearchResults, query);
+}
+function updateFindScoreHint() {
+    var c = findState.scoreCond;
+    var hint = document.getElementById('findScoreHint');
+    if (!hint) return;
+    if (!isScoreCondActive(c)) {
+        hint.textContent = '未过滤评分（' + getMetricLabel(c.metric) + '大于 0 分）';
+    } else {
+        hint.textContent = '只显示 ' + getMetricLabel(c.metric) + (c.op === 'gt' ? ' 大于 ' : ' 小于 ') + c.value + ' 分的照片';
+    }
+}
+function syncFindScoreEditor() {
+    var c = findState.scoreCond;
+    document.querySelectorAll('#findScoreMetricChips .score-dimension-chip').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.editorMetric === c.metric);
+    });
+    document.querySelectorAll('.find-score-editor .score-op-chip').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.editorOp === c.op);
+    });
+    var slider = document.getElementById('findScoreSlider');
+    if (slider) slider.value = c.value;
+    var input = document.getElementById('findScoreValue');
+    if (input) input.value = c.value;
+    updateFindScoreSliderVisual();
+    updateFindScoreHint();
 }
 
-function searchPhotos(query) {
+// ----- 实时执行查找 -----
+function findHasConditions() {
+    var s = findState;
+    return !!(s.query || s.mediaTypes.length || s.devices.length || isScoreCondActive(s.scoreCond) || s.dateRange ||
+        s.locations.length || s.people.length || s.tags.length ||
+        s.favorite || s.isProDevice || s.isProEdited || s.isDuplicate || s.isNewMonth || s.isICloud);
+}
+
+function buildFindSummary() {
+    var s = findState;
+    var parts = [];
+    if (s.query) parts.push('“' + s.query + '”');
+    if (s.mediaTypes.length) parts.push('媒体:' + s.mediaTypes.map(mediaLabel).join('/'));
+    if (s.devices.length) parts.push('设备:' + s.devices.join('/'));
+    if (isScoreCondActive(s.scoreCond)) parts.push(metricShort(s.scoreCond.metric) + (s.scoreCond.op === 'gt' ? '>' : '<') + s.scoreCond.value);
+    if (s.dateRange) parts.push('时间:' + (s.dateLabel || '自定义'));
+    if (s.locations.length) parts.push('地点:' + s.locations.join('/'));
+    if (s.people.length) parts.push('人物:' + s.people.join('/'));
+    if (s.tags.length) parts.push('标签:' + s.tags.join('/'));
+    if (s.favorite) parts.push('收藏');
+    if (s.isDuplicate) parts.push('重复/相似');
+    if (s.isNewMonth) parts.push('近一月新增');
+    if (s.isICloud) parts.push('已存iCloud');
+    if (s.isProDevice) parts.push('专业设备');
+    if (s.isProEdited) parts.push('专业软件调整');
+    return parts.length ? parts.join(' · ') : '未设置任何条件 · 显示全部照片';
+}
+
+// 实时执行：照片墙(浮层之后)随条件刷新，浮层只展示结果数量
+function runFind() {
+    findAppliedToWall = true; // 浮层交互期间照片墙始终反映当前条件
+    renderPhotos();
+    var count = getVisiblePhotos().length;
+    var hasCond = findHasConditions();
+    var countEl = document.getElementById('findCount');
+    if (countEl) countEl.textContent = (hasCond ? '匹配 ' : '全部 ') + count + ' 张';
+    var sumEl = document.getElementById('findActiveSummary');
+    if (sumEl) sumEl.textContent = buildFindSummary();
+    var clearBtn = document.getElementById('findQueryClear');
+    if (clearBtn) clearBtn.style.display = findState.query ? '' : 'none';
+}
+
+// ----- 重置 -----
+function resetFind() {
+    findState = createEmptyFindState();
+    var input = document.getElementById('findInput');
+    if (input) input.value = '';
+    document.querySelectorAll('.date-chip').forEach(function(chip) { chip.classList.remove('active'); });
+    var disp = document.getElementById('dateSelectedDisplay');
+    if (disp) disp.style.display = 'none';
+    renderFindFilters();
+    syncFindScoreEditor();
+    runFind();
+    showToast('已重置所有查找条件');
+}
+
+function updateFindBanner() {
+    var banner = document.getElementById('findAppliedBanner');
+    if (!banner) return;
+    if (findAppliedToWall && findHasConditions()) {
+        banner.classList.add('show');
+        var sum = document.getElementById('findAppliedSummary');
+        if (sum) sum.textContent = '查找：' + buildFindSummary();
+    } else {
+        banner.classList.remove('show');
+    }
+}
+
+function clearFindFromWall() {
+    findAppliedToWall = false;
+    updateFindBanner();
+    renderPhotos();
+    showToast('已清除照片墙的查找条件');
+}
+
+// ----- 自然语言解析（query 作为附加 AND 约束） -----
+function matchesQuery(photo, query) {
     var lower = query.toLowerCase();
     var scoreRule = parseScoreRule(query);
     var yearRule = parseYearRule(query);
     var oneMonthRule = lower.indexOf('近一月') !== -1 || lower.indexOf('最近一个月') !== -1;
     var tagRule = parseTagRule(query);
     var locationRule = parseLocationRule(query);
-    return photos.filter(function(photo) {
-        if (scoreRule) {
-            var targetScore = scoreRule.metric === 'aesthetic' ? photo.aestheticScore : photo.score;
-            if (scoreRule.op === 'gt' && !(targetScore > scoreRule.value)) return false;
-            if (scoreRule.op === 'lt' && !(targetScore < scoreRule.value)) return false;
-        }
-        if (yearRule && photo.date.indexOf(String(yearRule)) !== 0) return false;
-        if (oneMonthRule && !photo.isNewMonth) return false;
-        if (tagRule.length > 0) {
-            var hitTag = tagRule.some(function(tag) { return photo.tags.indexOf(tag) !== -1; });
-            if (!hitTag) return false;
-        }
-        if (locationRule && photo.location.indexOf(locationRule) === -1) return false;
-        if (!scoreRule && !yearRule && !oneMonthRule && tagRule.length === 0 && !locationRule) {
-            var textBlob = (photo.tags.join(' ') + ' ' + photo.location + ' ' + photo.date + ' 综合评分' + photo.score + ' 美学评分' + photo.aestheticScore).toLowerCase();
-            if (textBlob.indexOf(lower) === -1) return false;
-        }
-        return true;
-    }).sort(function(a, b) { return b.date.localeCompare(a.date); });
+    if (scoreRule) {
+        var targetScore = scoreRule.metric === 'aesthetic' ? photo.aestheticScore : photo.score;
+        if (scoreRule.op === 'gt' && !(targetScore > scoreRule.value)) return false;
+        if (scoreRule.op === 'lt' && !(targetScore < scoreRule.value)) return false;
+    }
+    if (yearRule && photo.date.indexOf(String(yearRule)) !== 0) return false;
+    if (oneMonthRule && !photo.isNewMonth) return false;
+    if (tagRule.length > 0 && !tagRule.some(function(tag) { return photo.tags.indexOf(tag) !== -1; })) return false;
+    if (locationRule && photo.location.indexOf(locationRule) === -1) return false;
+    if (!scoreRule && !yearRule && !oneMonthRule && tagRule.length === 0 && !locationRule) {
+        var textBlob = (photo.tags.join(' ') + ' ' + photo.location + ' ' + photo.date + ' ' + (photo.people || []).join(' ') + ' 综合评分' + photo.score + ' 美学评分' + photo.aestheticScore).toLowerCase();
+        if (textBlob.indexOf(lower) === -1) return false;
+    }
+    return true;
 }
 
 function parseScoreRule(query) {
@@ -1032,162 +1374,6 @@ function parseTagRule(query) {
 function parseLocationRule(query) {
     var hit = locationPool.find(function(city) { return query.indexOf(city) !== -1; });
     return hit || '';
-}
-
-function renderSearchResults(results, query) {
-    var summary = document.getElementById('searchSummary');
-    var container = document.getElementById('searchResults');
-    if (!summary || !container) return;
-    if (!query) {
-        summary.textContent = '输入关键词开始搜索';
-        container.innerHTML = '';
-        return;
-    }
-    summary.textContent = '“' + query + '” 共匹配到 ' + results.length + ' 张照片';
-    if (results.length === 0) {
-        container.innerHTML = '<div class="timeline-empty"><i class="fas fa-search"></i><h3>暂无匹配结果</h3><p>试试地点、时间或分数关键词</p></div>';
-        return;
-    }
-    container.innerHTML = results.map(function(photo) {
-        return '<div class="search-result-card"><img src="' + photo.url + '" alt="搜索结果"><div class="search-result-info"><div class="search-result-title">综合 ' + photo.score + ' · 美学 ' + photo.aestheticScore + ' · ' + photo.location + '</div><div class="search-result-meta">' + photo.date + ' · ' + photo.tags.join(' / ') + '</div></div><button class="btn btn-secondary search-open-btn" onclick="openPhotoFromSearch(' + photo.id + ')"><i class="fas fa-location-crosshairs"></i> 定位</button></div>';
-    }).join('');
-}
-
-function openPhotoFromSearch(id) {
-    activeSidebarTag = 'all';
-    activeQuickFilter = 'none';
-    isAdvancedFilterApplied = false;
-    document.querySelectorAll('#tagCloud .sidebar-tag-item').forEach(function(item) {
-        item.classList.toggle('active', item.dataset.tag === 'all');
-    });
-    document.querySelectorAll('.sidebar-item[data-quick]').forEach(function(item) {
-        item.classList.remove('active');
-    });
-    selectedPhotos.clear();
-    navigateToPage('photos');
-    renderPhotos();
-    updateMultiSelectToolbar();
-    openPhotoDetail(id);
-    showToast('已定位到照片 #' + id + '，并打开详情');
-}
-
-// ========== 筛选页 ==========
-function renderFilterPage() {
-    document.querySelectorAll('.score-dimension-chip').forEach(function(chip) {
-        chip.classList.toggle('active', chip.dataset.metric === scoreFilterMetric);
-    });
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
-}
-
-function setScoreFilterMetric(metric, evt) {
-    scoreFilterMetric = metric;
-    document.querySelectorAll('.score-dimension-chip').forEach(function(chip) {
-        chip.classList.toggle('active', chip.dataset.metric === metric);
-    });
-    isAdvancedFilterApplied = false;
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
-}
-
-function setScoreOperator(op, evt) {
-    scoreFilterOperator = op;
-    document.querySelectorAll('.score-op-chip').forEach(function(chip) {
-        chip.classList.toggle('active', chip.dataset.op === op);
-    });
-    isAdvancedFilterApplied = false;
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
-}
-
-function updateSliderValue() {
-    var slider = document.getElementById('scoreSlider');
-    var input = document.getElementById('scoreInput');
-    if (!slider || !input) return;
-    var val = parseInt(slider.value, 10);
-    scoreThreshold = val;
-    input.value = val;
-    var display = document.getElementById('scoreDisplay');
-    if (display) display.textContent = val;
-    isAdvancedFilterApplied = false;
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
-}
-
-function updateSlider() {
-    var slider = document.getElementById('scoreSlider');
-    var input = document.getElementById('scoreInput');
-    if (!slider || !input) return;
-    var val = Math.min(100, Math.max(0, parseInt(input.value, 10) || 0));
-    scoreThreshold = val;
-    slider.value = val;
-    input.value = val;
-    var display = document.getElementById('scoreDisplay');
-    if (display) display.textContent = val;
-    isAdvancedFilterApplied = false;
-    updateScoreFilterHint();
-    updateFilterPreviewCount();
-}
-
-function updateScoreSliderVisual() {
-    var slider = document.getElementById('scoreSlider');
-    if (!slider) return;
-    var min = Number(slider.min || 0);
-    var max = Number(slider.max || 100);
-    var percent = ((scoreThreshold - min) / (max - min)) * 100;
-    var activeStart = 'var(--accent-gradient-1)';
-    var activeEnd = 'var(--accent-gradient-2)';
-    var inactive = 'var(--glass-bg)';
-    if (scoreFilterOperator === 'lt') {
-        slider.style.background = 'linear-gradient(90deg, ' + activeStart + ' 0%, ' + activeEnd + ' ' + percent + '%, ' + inactive + ' ' + percent + '%, ' + inactive + ' 100%)';
-    } else {
-        slider.style.background = 'linear-gradient(90deg, ' + inactive + ' 0%, ' + inactive + ' ' + percent + '%, ' + activeStart + ' ' + percent + '%, ' + activeEnd + ' 100%)';
-    }
-}
-
-function updateScoreFilterHint() {
-    var opText = document.getElementById('scoreOpText');
-    if (opText) opText.textContent = scoreFilterOperator === 'gt' ? '大于' : '小于';
-    var display = document.getElementById('scoreDisplay');
-    if (display) display.textContent = scoreThreshold;
-    var metricText = document.getElementById('scoreMetricText');
-    if (metricText) metricText.textContent = getMetricLabel(scoreFilterMetric);
-    updateScoreSliderVisual();
-}
-
-function matchesScoreFilter(photo) {
-    var metricScore = getMetricScore(photo, scoreFilterMetric);
-    if (scoreFilterOperator === 'gt') return metricScore > scoreThreshold;
-    return metricScore < scoreThreshold;
-}
-
-function updateFilterPreviewCount() {
-    var preview = applyAdvancedFilters(getBasePhotosForFilter());
-    var countEl = document.getElementById('filterPreviewCount');
-    if (countEl) countEl.textContent = preview.length;
-    return preview;
-}
-
-function previewFilteredPhotos() {
-    isAdvancedFilterApplied = true;
-    selectedPhotos.clear();
-    navigateToPage('photos');
-    renderPhotos();
-    updateMultiSelectToolbar();
-    var count = getVisiblePhotos().length;
-    showToast('预览完成：共 ' + count + ' 张照片');
-}
-
-function openDeleteModalForFiltered() {
-    var preview = updateFilterPreviewCount();
-    if (preview.length === 0) {
-        showToast('当前筛选无可删除照片', 'warning');
-        return;
-    }
-    pendingDeleteIds = preview.map(function(photo) { return photo.id; });
-    var countEl = document.getElementById('deleteCount');
-    if (countEl) countEl.textContent = pendingDeleteIds.length;
-    document.getElementById('deleteModal').classList.add('show');
 }
 
 // ========== 设置页 ==========
@@ -1260,19 +1446,45 @@ function cycleBadgeScoreMode() {
     setBadgeScoreMode(scoreBadgeMode === 'aesthetic' ? 'composite' : 'aesthetic');
 }
 
-// ========== 主题切换 ==========
-function toggleTheme() {
-    var html = document.documentElement;
-    var currentTheme = html.getAttribute('data-theme');
-    var themeBtn = document.querySelector('.top-bar-right .icon-btn[title="主题切换"] i')
-        || document.querySelector('.top-bar-right .icon-btn i.fa-moon, .top-bar-right .icon-btn i.fa-sun');
-    if (currentTheme === 'dark') {
-        html.removeAttribute('data-theme');
-        if (themeBtn) themeBtn.className = 'fas fa-moon';
-    } else {
-        html.setAttribute('data-theme', 'dark');
-        if (themeBtn) themeBtn.className = 'fas fa-sun';
+// ========== 主题切换：跟随系统 / 浅色 / 深色（默认跟随系统） ==========
+var themeMode = 'system'; // 'system' | 'light' | 'dark'
+var _systemThemeMql = null;
+
+function initTheme() {
+    themeMode = 'system';
+    if (window.matchMedia) {
+        _systemThemeMql = window.matchMedia('(prefers-color-scheme: dark)');
+        var onSystemChange = function() { if (themeMode === 'system') applyThemeMode('system'); };
+        if (_systemThemeMql.addEventListener) _systemThemeMql.addEventListener('change', onSystemChange);
+        else if (_systemThemeMql.addListener) _systemThemeMql.addListener(onSystemChange);
     }
+    applyThemeMode('system');
+}
+
+function systemPrefersDark() {
+    return !!(_systemThemeMql ? _systemThemeMql.matches : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
+}
+
+function applyThemeMode(mode) {
+    themeMode = mode;
+    var html = document.documentElement;
+    var effectiveDark = (mode === 'dark') || (mode === 'system' && systemPrefersDark());
+    if (effectiveDark) html.setAttribute('data-theme', 'dark');
+    else html.removeAttribute('data-theme');
+
+    var btn = document.querySelector('.top-bar-right .icon-btn[title^="主题"]');
+    var icon = btn ? btn.querySelector('i') : null;
+    if (icon) {
+        icon.className = 'fas ' + (mode === 'system' ? 'fa-circle-half-stroke' : (mode === 'dark' ? 'fa-moon' : 'fa-sun'));
+    }
+    if (btn) btn.title = '主题：' + (mode === 'system' ? '跟随系统' : (mode === 'dark' ? '深色' : '浅色'));
+}
+
+// 循环切换：跟随系统 → 浅色 → 深色 → 跟随系统
+function toggleTheme() {
+    var next = themeMode === 'system' ? 'light' : (themeMode === 'light' ? 'dark' : 'system');
+    applyThemeMode(next);
+    showToast('主题：' + (next === 'system' ? '跟随系统' : (next === 'dark' ? '深色' : '浅色')));
 }
 
 // ========== Toast ==========
@@ -1315,45 +1527,29 @@ function selectDateRange(type, evt) {
     document.querySelectorAll('.date-chip').forEach(function(chip) {
         chip.classList.remove('active');
     });
-    if (dateRangeMap[type].all) {
-        document.getElementById('dateSelectedDisplay').style.display = 'none';
-        currentDateRange = null;
-        if (evt && evt.target) evt.target.closest('.date-chip').classList.add('active');
-        isAdvancedFilterApplied = false;
-        updateFilterPreviewCount();
-        showToast('已选择全部时间');
-        return;
-    }
-    if (dateRangeMap[type].holidays) {
-        document.getElementById('dateRangeText').textContent = '春节 · 国庆 · 劳动节';
-        document.getElementById('dateSelectedDisplay').style.display = 'flex';
-        currentDateRange = { holidays: true };
-        if (evt && evt.target) evt.target.closest('.date-chip').classList.add('active');
-        isAdvancedFilterApplied = false;
-        updateFilterPreviewCount();
-        showToast('已选择：法定节假日');
-        return;
-    }
-    if (dateRangeMap[type].special && type === 'lastTrip') {
+    var disp = document.getElementById('dateSelectedDisplay');
+    var textEl = document.getElementById('dateRangeText');
+    if (dateRangeMap[type] && dateRangeMap[type].holidays) {
+        if (textEl) textEl.textContent = '春节 · 国庆 · 劳动节';
+        if (disp) disp.style.display = 'flex';
+        findState.dateRange = { holidays: true };
+        findState.dateLabel = '法定节假日';
+    } else if (type === 'lastTrip') {
         var tripStart = '2025-08-01';
         var tripEnd = '2025-08-15';
-        document.getElementById('dateRangeText').textContent = tripStart + ' 至 ' + tripEnd;
-        document.getElementById('dateSelectedDisplay').style.display = 'flex';
-        currentDateRange = { start: tripStart, end: tripEnd };
-        if (evt && evt.target) evt.target.closest('.date-chip').classList.add('active');
-        isAdvancedFilterApplied = false;
-        updateFilterPreviewCount();
-        showToast('已选择：最近一次旅行 (' + tripStart + ' 至 ' + tripEnd + ')');
-        return;
+        if (textEl) textEl.textContent = tripStart + ' 至 ' + tripEnd;
+        if (disp) disp.style.display = 'flex';
+        findState.dateRange = { start: tripStart, end: tripEnd };
+        findState.dateLabel = '最近一次旅行';
+    } else {
+        var range = calculateDateRange(type);
+        if (textEl) textEl.textContent = range.start + ' 至 ' + range.end;
+        if (disp) disp.style.display = 'flex';
+        findState.dateRange = { start: range.start, end: range.end };
+        findState.dateLabel = range.label;
     }
-    var range = calculateDateRange(type);
-    document.getElementById('dateRangeText').textContent = range.start + ' 至 ' + range.end;
-    currentDateRange = range;
-    document.getElementById('dateSelectedDisplay').style.display = 'flex';
     if (evt && evt.target) evt.target.closest('.date-chip').classList.add('active');
-    isAdvancedFilterApplied = false;
-    updateFilterPreviewCount();
-    showToast('已选择：' + range.label);
+    runFind();
 }
 
 function calculateDateRange(type) {
@@ -1434,20 +1630,15 @@ function clearDateRange() {
     document.querySelectorAll('.date-chip').forEach(function(chip) {
         chip.classList.remove('active');
     });
-    document.getElementById('dateSelectedDisplay').style.display = 'none';
-    currentDateRange = null;
-    isAdvancedFilterApplied = false;
-    updateFilterPreviewCount();
-    showToast('已清除日期筛选');
+    var disp = document.getElementById('dateSelectedDisplay');
+    if (disp) disp.style.display = 'none';
+    findState.dateRange = null;
+    findState.dateLabel = '';
+    runFind();
+    showToast('已清除时间筛选');
 }
 
-// ========== 筛选标签云 ==========
-function toggleTag(el) {
-    el.classList.toggle('active');
-    showToast('已筛选: ' + el.textContent.trim());
-}
-
-function toggleTagSort() { showToast('切换排序方式'); }
+// ========== 侧边栏标签云 ==========
 function showMoreTags() {
     initSidebarExtraTags();
     areExtraTagsVisible = !areExtraTagsVisible;
@@ -1474,17 +1665,6 @@ function showMoreTags() {
     if (icon) icon.className = areExtraTagsVisible ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
     if (text) text.textContent = areExtraTagsVisible ? '收起' : '更多';
 }
-function toggleFilterChip(el) {
-    el.classList.toggle('active');
-    var key = el.dataset.filterKey;
-    if (key && Object.prototype.hasOwnProperty.call(activeFilterOptions, key)) {
-        activeFilterOptions[key] = el.classList.contains('active');
-    }
-    isAdvancedFilterApplied = false;
-    updateFilterPreviewCount();
-    showToast('已切换筛选: ' + el.textContent.trim());
-}
-
 // ========== 删除确认 ==========
 function showDeleteModal(id) {
     if (typeof id === 'number') {
@@ -1519,8 +1699,9 @@ function confirmDelete() {
     }
     var deletedCount = pendingDeleteIds.length;
     pendingDeleteIds = [];
-    updateFilterPreviewCount();
     renderPhotos();
+    updateFindBanner();
+    if (isFindOpen()) runFind();
     updateMultiSelectToolbar();
     showToast('已删除 ' + deletedCount + ' 张照片');
     closeDeleteModal();
@@ -1565,12 +1746,9 @@ function recomputePhotoScoresByWeights() {
         photo.comprehensiveScore = photo.score;
         photo.retentionAdvice = buildRetentionAdvice(photo);
     });
-    if (currentSearchQuery) {
-        currentSearchResults = searchPhotos(currentSearchQuery);
-    }
     renderPhotos();
-    renderSearchPage();
-    updateFilterPreviewCount();
+    updateFindBanner();
+    if (isFindOpen()) runFind();
     if (currentDetailPhotoId) {
         openPhotoDetail(currentDetailPhotoId);
     }
@@ -1652,20 +1830,19 @@ function savePrompts() {
 document.addEventListener('keydown', function(e) {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        navigateToPage('search');
-        var input = document.getElementById('searchInput');
-        if (input) {
-            input.focus();
-            input.select();
-        }
-        showSearchSuggestions();
+        if (isFindOpen()) { closeFind(); } else { openFind(); }
         return;
     }
     if (e.key === 'Escape') {
-        closeDeleteModal();
-        closeWeightConfig();
-        closePromptConfig();
-        closePhotoDetail();
+        // 优先关闭层级更高的模态框（详情/删除/权重/提示词，z-index 高于查找浮层）
+        if (document.querySelector('.modal-overlay.show')) {
+            closeDeleteModal();
+            closeWeightConfig();
+            closePromptConfig();
+            closePhotoDetail();
+            return;
+        }
+        if (isFindOpen()) { closeFind(); return; }
     }
 });
 

@@ -20,12 +20,15 @@
             <nav class="nav-tabs">
                 <button class="nav-tab active" data-page="photos"><i class="fas fa-images"></i> 照片</button>
                 <button class="nav-tab" data-page="timeline"><i class="fas fa-clock"></i> 时间线</button>
-                <button class="nav-tab" data-page="search"><i class="fas fa-search"></i> 搜索</button>
-                <button class="nav-tab" data-page="filter"><i class="fas fa-filter"></i> 筛选</button>
                 <button class="nav-tab" data-page="reports"><i class="fas fa-file-alt"></i> 报告</button>
                 <button class="nav-tab" data-page="settings"><i class="fas fa-cog"></i> 设置</button>
             </nav>
         </div>
+        <button class="search-entry" onclick="openFind()" title="查找 (⌘K)">
+            <i class="fas fa-search"></i>
+            <span>搜索照片…</span>
+            <kbd>⌘K</kbd>
+        </button>
         <div class="top-bar-right">
             <button class="icon-btn" onclick="toggleTheme()" title="主题切换"><i class="fas fa-moon"></i></button>
             <button class="icon-btn" title="通知"><i class="fas fa-bell"></i></button>
@@ -120,6 +123,12 @@
                     <button class="btn btn-primary" onclick="startAnalysis()"><i class="fas fa-play"></i> AI 分析</button>
                 </div>
             </div>
+            <div class="find-applied-banner" id="findAppliedBanner">
+                <i class="fas fa-filter"></i>
+                <span id="findAppliedSummary">查找条件生效中</span>
+                <button class="find-banner-edit" onclick="openFind()"><i class="fas fa-sliders-h"></i> 调整</button>
+                <button class="find-banner-clear" onclick="clearFindFromWall()"><i class="fas fa-times"></i> 清除</button>
+            </div>
             <div class="photo-grid" id="photoGrid"></div>
         </div>
 
@@ -139,147 +148,6 @@
                 </div>
             </div>
             <div class="timeline" id="timelineContainer"></div>
-        </div>
-
-        <!-- 搜索页 -->
-        <div class="page" id="page-search">
-            <div class="page-header">
-                <div class="page-header-left">
-                    <h1 class="page-title">搜索</h1>
-                </div>
-                <div class="page-actions">
-                    <button class="btn btn-secondary" onclick="clearSearch()"><i class="fas fa-rotate-left"></i> 清空</button>
-                </div>
-            </div>
-            <div class="search-container">
-                <i class="fas fa-search search-icon"></i>
-                <input type="text" class="search-input" id="searchInput" placeholder="输入自然语言，如：去年夏天在海边拍的照片" oninput="handleSearchInput()" onfocus="showSearchSuggestions()" onblur="hideSearchSuggestions()">
-                <button class="search-clear" id="searchClear" onclick="clearSearch()" style="display:none"><i class="fas fa-times-circle"></i></button>
-            </div>
-            <div class="search-suggestions" id="searchSuggestions">
-                <div class="suggestion-category">热门搜索</div>
-                <div id="hotSearchList"></div>
-                <div class="suggestion-category">快捷筛选</div>
-                <div class="suggestion-item" onclick="applySearchSuggestion('评分大于80')"><i class="fas fa-star"></i><span>评分大于80</span></div>
-                <div class="suggestion-item" onclick="applySearchSuggestion('美学评分大于85')"><i class="fas fa-camera-retro"></i><span>美学评分大于85</span></div>
-                <div class="suggestion-item" onclick="applySearchSuggestion('评分小于60')"><i class="fas fa-star-half-alt"></i><span>评分小于60</span></div>
-                <div class="suggestion-item" onclick="applySearchSuggestion('标签:旅行')"><i class="fas fa-plane"></i><span>标签:旅行</span></div>
-            </div>
-            <div class="search-summary" id="searchSummary">输入关键词开始搜索</div>
-            <div class="search-results-grid" id="searchResults"></div>
-        </div>
-
-        <!-- 筛选页 -->
-        <div class="page" id="page-filter">
-            <div class="page-header">
-                <h1 class="page-title">筛选</h1>
-            </div>
-            <div class="filter-panel">
-                <div class="filter-section">
-                    <div class="filter-label"><i class="fas fa-star"></i> 维度评分范围</div>
-                    <div class="score-dimension-chips">
-                        <button type="button" class="score-dimension-chip active" data-metric="aesthetics" onclick="setScoreFilterMetric('aesthetics', event)">美学</button>
-                        <button type="button" class="score-dimension-chip" data-metric="composite" onclick="setScoreFilterMetric('composite', event)">综合</button>
-                        <button type="button" class="score-dimension-chip" data-metric="technical" onclick="setScoreFilterMetric('technical', event)">技术</button>
-                        <button type="button" class="score-dimension-chip" data-metric="content" onclick="setScoreFilterMetric('content', event)">内容</button>
-                        <button type="button" class="score-dimension-chip" data-metric="emotion" onclick="setScoreFilterMetric('emotion', event)">情感</button>
-                        <button type="button" class="score-dimension-chip" data-metric="rarity" onclick="setScoreFilterMetric('rarity', event)">稀有</button>
-                        <button type="button" class="score-dimension-chip" data-metric="uniqueness" onclick="setScoreFilterMetric('uniqueness', event)">独特</button>
-                    </div>
-                    <div class="score-filter-operator">
-                        <button type="button" class="score-op-chip active" data-op="gt" onclick="setScoreOperator('gt', event)">大于</button>
-                        <button type="button" class="score-op-chip" data-op="lt" onclick="setScoreOperator('lt', event)">小于</button>
-                    </div>
-                    <div class="slider-container">
-                        <span style="font-size:12px;color:var(--text-secondary)">0</span>
-                        <input type="range" class="slider" id="scoreSlider" min="0" max="100" value="60" oninput="updateSliderValue()">
-                        <span style="font-size:12px;color:var(--text-secondary)">100</span>
-                        <input type="number" class="score-input" id="scoreInput" value="60" min="0" max="100" onchange="updateSlider()">
-                    </div>
-                    <p class="score-filter-hint">只显示<span id="scoreMetricText">美学评分</span><span id="scoreOpText">大于</span> <strong id="scoreDisplay">60</strong> 分的照片</p>
-                </div>
-                <div class="filter-section">
-                    <div class="filter-label"><i class="fas fa-calendar"></i> 时间范围</div>
-                    <div class="date-filter-container">
-                        <div class="date-filter-row">
-                            <span class="date-filter-label"><i class="fas fa-calendar-day"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip" onclick="selectDateRange('today', event)">今天</button>
-                                <button class="date-chip" onclick="selectDateRange('yesterday', event)">昨天</button>
-                                <button class="date-chip" onclick="selectDateRange('last3days', event)">近3天</button>
-                            </div>
-                        </div>
-                        <div class="date-filter-row">
-                            <span class="date-filter-label"><i class="fas fa-calendar-week"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip" onclick="selectDateRange('thisWeek', event)">本周</button>
-                                <button class="date-chip" onclick="selectDateRange('near1Week', event)">近一周</button>
-                                <button class="date-chip" onclick="selectDateRange('lastWeek', event)">上周</button>
-                                <button class="date-chip" onclick="selectDateRange('last2Weeks', event)">近两周</button>
-                            </div>
-                        </div>
-                        <div class="date-filter-row">
-                            <span class="date-filter-label"><i class="fas fa-calendar-alt"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip" onclick="selectDateRange('thisMonth', event)">本月</button>
-                                <button class="date-chip" onclick="selectDateRange('near1Month', event)">近一月</button>
-                                <button class="date-chip" onclick="selectDateRange('lastMonth', event)">上月</button>
-                                <button class="date-chip" onclick="selectDateRange('last3Months', event)">近3月</button>
-                                <button class="date-chip" onclick="selectDateRange('last6Months', event)">近6月</button>
-                            </div>
-                        </div>
-                        <div class="date-filter-row">
-                            <span class="date-filter-label"><i class="fas fa-calendar"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip" onclick="selectDateRange('thisYear', event)">本年</button>
-                                <button class="date-chip" onclick="selectDateRange('lastYear', event)">去年</button>
-                                <button class="date-chip" onclick="selectDateRange('last2Years', event)">近年</button>
-                            </div>
-                        </div>
-                        <div class="date-filter-row">
-                            <span class="date-filter-label" style="color: var(--accent-purple);"><i class="fas fa-star"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip special" onclick="selectDateRange('lastTrip', event)">
-                                    <i class="fas fa-map-marker-alt"></i> 最近一次旅行
-                                </button>
-                                <button class="date-chip special" onclick="selectDateRange('holidays', event)">
-                                    <i class="fas fa-gift"></i> 法定节假日
-                                </button>
-                            </div>
-                        </div>
-                        <div class="date-filter-row" style="margin-top: 4px;">
-                            <span class="date-filter-label" style="color: var(--text-secondary); opacity: 0.5;"><i class="fas fa-infinity"></i></span>
-                            <div class="date-filter-chips">
-                                <button class="date-chip all-time" onclick="selectDateRange('allTime', event)">全部时间</button>
-                            </div>
-                        </div>
-                        <div class="date-selected-display" id="dateSelectedDisplay" style="display: none;">
-                            <i class="fas fa-calendar-check"></i>
-                            <span id="dateRangeText">已选择日期范围</span>
-                            <button class="clear-btn" onclick="clearDateRange()"><i class="fas fa-times"></i></button>
-                        </div>
-                    </div>
-                </div>
-                <div class="filter-section">
-                    <div class="filter-label"><i class="fas fa-camera-retro"></i> 设备与来源</div>
-                    <div class="filter-tag-cloud">
-                        <button class="filter-chip" data-filter-key="isProDevice" onclick="toggleFilterChip(this)"><i class="fas fa-camera-retro"></i> 专业设备</button>
-                        <button class="filter-chip" data-filter-key="isProEdited" onclick="toggleFilterChip(this)"><i class="fas fa-magic"></i> 专业软件调整</button>
-                    </div>
-                </div>
-                <div class="filter-section">
-                    <div class="filter-label"><i class="fas fa-filter"></i> 其他筛选</div>
-                    <div class="filter-tag-cloud">
-                        <button class="filter-chip" data-filter-key="isDuplicate" onclick="toggleFilterChip(this)"><i class="fas fa-copy"></i> 重复/相似</button>
-                        <button class="filter-chip" data-filter-key="isNewMonth" onclick="toggleFilterChip(this)"><i class="fas fa-clock"></i> 近一月新增</button>
-                        <button class="filter-chip" data-filter-key="isICloud" onclick="toggleFilterChip(this)"><i class="fas fa-cloud"></i> 已存iCloud</button>
-                    </div>
-                </div>
-                <div class="filter-actions">
-                    <button class="btn btn-secondary" onclick="previewFilteredPhotos()"><i class="fas fa-eye"></i> 预览结果（<span id="filterPreviewCount">0</span>）</button>
-                    <button class="btn btn-danger" onclick="openDeleteModalForFiltered()"><i class="fas fa-trash"></i> 移至废纸篓</button>
-                </div>
-            </div>
         </div>
 
         <!-- 报告页 -->
@@ -451,11 +319,137 @@
     <nav class="bottom-nav">
         <div class="nav-item active" data-page="photos"><i class="fas fa-images"></i><span>照片</span></div>
         <div class="nav-item" data-page="timeline"><i class="fas fa-clock"></i><span>时间线</span></div>
-        <div class="nav-item" data-page="search"><i class="fas fa-search"></i><span>搜索</span></div>
-        <div class="nav-item" data-page="filter"><i class="fas fa-filter"></i><span>筛选</span></div>
+        <div class="nav-item nav-item-find" onclick="openFind()" title="查找 (⌘K)"><i class="fas fa-search"></i><span>查找</span></div>
         <div class="nav-item" data-page="reports"><i class="fas fa-file-alt"></i><span>报告</span></div>
         <div class="nav-item" data-page="settings"><i class="fas fa-cog"></i><span>设置</span></div>
     </nav>
+
+    <!-- 全局「查找」浮层（搜索 + 筛选统一入口；照片墙在浮层之后实时更新） -->
+    <div class="find-overlay" id="findOverlay" onclick="if(event.target===this)closeFind()">
+        <div class="find-panel">
+            <div class="find-head">
+                <div class="find-search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="findInput" placeholder="用一句话查找，如：去年夏天在三亚的高分照片" oninput="onFindQueryInput()">
+                    <button class="find-query-clear" id="findQueryClear" onclick="clearFindQuery()" style="display:none"><i class="fas fa-times-circle"></i></button>
+                </div>
+                <button class="btn btn-secondary find-reset" onclick="resetFind()" title="重置所有条件"><i class="fas fa-rotate-left"></i> 重置</button>
+                <button class="icon-btn" onclick="closeFind()" title="关闭 (Esc)"><i class="fas fa-times"></i></button>
+            </div>
+
+            <div class="find-count-bar">
+                <span class="find-count" id="findCount">全部 48 张</span>
+                <span class="find-count-hint"><i class="fas fa-bolt"></i> 照片页将按条件实时更新</span>
+            </div>
+
+            <div class="find-body">
+                <div class="find-filters" id="findFilters">
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-photo-film"></i> 媒体类型</div>
+                        <div class="find-chip-row" id="findMediaChips"></div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-star"></i> 评分</div>
+                        <div class="find-score-editor">
+                            <div class="score-dimension-chips" id="findScoreMetricChips">
+                                <button type="button" class="score-dimension-chip active" data-editor-metric="aesthetics" onclick="setFindScoreEditorMetric('aesthetics')">美学</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="composite" onclick="setFindScoreEditorMetric('composite')">综合</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="technical" onclick="setFindScoreEditorMetric('technical')">技术</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="content" onclick="setFindScoreEditorMetric('content')">内容</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="emotion" onclick="setFindScoreEditorMetric('emotion')">情感</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="rarity" onclick="setFindScoreEditorMetric('rarity')">稀有</button>
+                                <button type="button" class="score-dimension-chip" data-editor-metric="uniqueness" onclick="setFindScoreEditorMetric('uniqueness')">独特</button>
+                            </div>
+                            <div class="score-filter-operator">
+                                <button type="button" class="score-op-chip active" data-editor-op="gt" onclick="setFindScoreEditorOp('gt')">大于</button>
+                                <button type="button" class="score-op-chip" data-editor-op="lt" onclick="setFindScoreEditorOp('lt')">小于</button>
+                            </div>
+                            <div class="slider-container">
+                                <span style="font-size:12px;color:var(--text-secondary)">0</span>
+                                <input type="range" class="slider" id="findScoreSlider" min="0" max="100" value="0" oninput="onFindScoreSliderInput()">
+                                <span style="font-size:12px;color:var(--text-secondary)">100</span>
+                                <input type="number" class="score-input" id="findScoreValue" value="0" min="0" max="100" oninput="onFindScoreNumberInput()">
+                            </div>
+                            <p class="score-filter-hint" id="findScoreHint">未过滤评分（美学评分大于 0 分）</p>
+                        </div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-calendar"></i> 时间范围</div>
+                        <div class="date-filter-container">
+                            <div class="date-filter-row">
+                                <span class="date-filter-label"><i class="fas fa-calendar-day"></i></span>
+                                <div class="date-filter-chips">
+                                    <button class="date-chip" onclick="selectDateRange('today', event)">今天</button>
+                                    <button class="date-chip" onclick="selectDateRange('yesterday', event)">昨天</button>
+                                    <button class="date-chip" onclick="selectDateRange('last3days', event)">近3天</button>
+                                </div>
+                            </div>
+                            <div class="date-filter-row">
+                                <span class="date-filter-label"><i class="fas fa-calendar-week"></i></span>
+                                <div class="date-filter-chips">
+                                    <button class="date-chip" onclick="selectDateRange('thisWeek', event)">本周</button>
+                                    <button class="date-chip" onclick="selectDateRange('near1Week', event)">近一周</button>
+                                    <button class="date-chip" onclick="selectDateRange('lastWeek', event)">上周</button>
+                                    <button class="date-chip" onclick="selectDateRange('last2Weeks', event)">近两周</button>
+                                </div>
+                            </div>
+                            <div class="date-filter-row">
+                                <span class="date-filter-label"><i class="fas fa-calendar-alt"></i></span>
+                                <div class="date-filter-chips">
+                                    <button class="date-chip" onclick="selectDateRange('thisMonth', event)">本月</button>
+                                    <button class="date-chip" onclick="selectDateRange('near1Month', event)">近一月</button>
+                                    <button class="date-chip" onclick="selectDateRange('lastMonth', event)">上月</button>
+                                    <button class="date-chip" onclick="selectDateRange('last3Months', event)">近3月</button>
+                                    <button class="date-chip" onclick="selectDateRange('last6Months', event)">近6月</button>
+                                </div>
+                            </div>
+                            <div class="date-filter-row">
+                                <span class="date-filter-label"><i class="fas fa-calendar"></i></span>
+                                <div class="date-filter-chips">
+                                    <button class="date-chip" onclick="selectDateRange('thisYear', event)">本年</button>
+                                    <button class="date-chip" onclick="selectDateRange('lastYear', event)">去年</button>
+                                    <button class="date-chip" onclick="selectDateRange('last2Years', event)">近年</button>
+                                </div>
+                            </div>
+                            <div class="date-filter-row">
+                                <span class="date-filter-label" style="color: var(--accent-purple);"><i class="fas fa-star"></i></span>
+                                <div class="date-filter-chips">
+                                    <button class="date-chip special" onclick="selectDateRange('lastTrip', event)"><i class="fas fa-map-marker-alt"></i> 最近一次旅行</button>
+                                    <button class="date-chip special" onclick="selectDateRange('holidays', event)"><i class="fas fa-gift"></i> 法定节假日</button>
+                                </div>
+                            </div>
+                            <div class="date-selected-display" id="dateSelectedDisplay" style="display: none;">
+                                <i class="fas fa-calendar-check"></i>
+                                <span id="dateRangeText">已选择日期范围</span>
+                                <button class="clear-btn" onclick="clearDateRange()"><i class="fas fa-times"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-sliders-h"></i> 状态与来源</div>
+                        <div class="find-chip-row" id="findStatusChips"></div>
+                        <div class="find-chip-row" id="findDeviceChips" style="margin-top:8px;"></div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-map-marker-alt"></i> 地点</div>
+                        <div class="find-chip-row" id="findLocationChips"></div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-user"></i> 人物</div>
+                        <div class="find-chip-row" id="findPeopleChips"></div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label"><i class="fas fa-tags"></i> 标签</div>
+                        <div class="find-chip-row" id="findTagChips"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="find-foot">
+                <span class="find-active-summary" id="findActiveSummary">未设置任何条件 · 显示全部照片</span>
+            </div>
+        </div>
+    </div>
 
     <!-- 权重配置模态框 -->
     <div class="modal-overlay" id="weightConfigModal">
