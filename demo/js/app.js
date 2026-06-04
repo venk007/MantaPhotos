@@ -75,7 +75,7 @@ var gridSizeLevel = 3; // 默认8列
 
 // 侧边栏悬浮触发
 var sidebarHoverEnabled = true;
-var sidebarHoverDelay = 0.5; // 秒，可配置
+var sidebarHoverDelay = 0.5; // 固定 0.5 秒，不开放配置
 var _sidebarHoverTimer = null;
 // 滚动自动隐藏状态
 var _preScrollSidebarVisible = true;  // 滚动前的展开状态
@@ -303,6 +303,7 @@ function init() {
     updateAnalysisProgressUI();
     updateBadgeScoreModeDisplay(); // 同时初始化排序选项文案
     updateModelButtons();
+    renderScoreTierConfig();
     applyGridSize(); // 初始化网格尺寸
     // 初始化侧边栏展开状态（默认照片页展开）
     var group = document.getElementById('sidebarGroup');
@@ -398,14 +399,20 @@ function cancelSidebarHoverTimer() {
 function onHoverEnabledChange() {
     var checkbox = document.getElementById('hoverTriggerEnabled');
     sidebarHoverEnabled = checkbox ? checkbox.checked : true;
-    var delayItem = document.getElementById('hoverDelayItem');
-    if (delayItem) delayItem.classList.toggle('hover-delay-disabled', !sidebarHoverEnabled);
 }
 
-function onHoverDelaySlider(val) {
-    sidebarHoverDelay = parseFloat(val);
-    var display = document.getElementById('hoverDelayDisplay');
-    if (display) display.textContent = (sidebarHoverDelay === 0 ? '即时' : sidebarHoverDelay.toFixed(1) + ' 秒');
+// ========== 底部导航显示开关 ==========
+var scoreBadgeVisible = true; // 由照片页 美学/综合 分段按钮控制：再次点击当前模式即隐藏
+
+var bottomNavVisible = true;
+function onBottomNavToggle() {
+    var checkbox = document.getElementById('bottomNavEnabled');
+    bottomNavVisible = checkbox ? checkbox.checked : true;
+    var nav = document.querySelector('.bottom-nav');
+    if (nav) nav.style.display = bottomNavVisible ? '' : 'none';
+    var main = document.querySelector('main');
+    if (main) main.style.paddingBottom = bottomNavVisible ? '' : '20px';
+    showToast(bottomNavVisible ? '底部功能栏已显示' : '底部功能栏已隐藏');
 }
 
 function initSidebarTagSearch() {
@@ -658,8 +665,14 @@ function computeFindFilter(list) {
 }
 
 // ========== 照片网格 ==========
+// 四档配色分界：蓝 >= t1 > 绿 >= t2 > 黄 >= t3 > 粉；区间互斥且覆盖 0-100
+var scoreTierBounds = { t1: 80, t2: 60, t3: 40 };
+
 function getScoreClass(score) {
-    return score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
+    if (score >= scoreTierBounds.t1) return 'tier-blue';
+    if (score >= scoreTierBounds.t2) return 'tier-green';
+    if (score >= scoreTierBounds.t3) return 'tier-yellow';
+    return 'tier-pink';
 }
 
 function renderPhotos() {
@@ -713,11 +726,18 @@ function applyGridSize() {
     photoGrid.style.gap = gap + 'px';
     var colWidth = 'calc((100% - ' + ((cols - 1) * gap) + 'px) / ' + cols + ')';
     photoGrid.style.setProperty('--photo-col-width', colWidth);
-    // 圆角随列数缩放
     var radiusMap = { 2: '14px', 4: '12px', 6: '10px', 8: '8px', 12: '6px', 16: '4px', 32: '2px' };
     photoGrid.style.setProperty('--photo-card-radius', radiusMap[cols] || '8px');
-    // − 按钮：缩小(+level)；在最大列时禁用
-    // + 按钮：放大(-level)；在最小列时禁用
+    // 分数标签：用户关闭则始终隐藏；缩放到最后两级（缩略图过小）也隐藏
+    var hideByZoom = gridSizeLevel >= gridColLevels.length - 2;
+    photoGrid.classList.toggle('hide-score', !scoreBadgeVisible || hideByZoom);
+    // scale pulse：0.995→1，0.1s，走 compositor 线程，不触发 layout
+    photoGrid.style.transition = 'none';
+    photoGrid.style.transform = 'scale(0.995)';
+    requestAnimationFrame(function() {
+        photoGrid.style.transition = 'transform 0.1s ease-out';
+        photoGrid.style.transform = 'scale(1)';
+    });
     var outBtn = document.getElementById('zoomOutBtn');
     var inBtn = document.getElementById('zoomInBtn');
     if (outBtn) outBtn.disabled = (gridSizeLevel === gridColLevels.length - 1);
@@ -1419,8 +1439,11 @@ function updateBadgeScoreModeDisplay() {
     var aeBtn = document.getElementById('badgeSegAesthetic');
     var coBtn = document.getElementById('badgeSegComposite');
     if (aeBtn && coBtn) {
-        aeBtn.classList.toggle('active', scoreBadgeMode === 'aesthetic');
-        coBtn.classList.toggle('active', scoreBadgeMode === 'composite');
+        aeBtn.classList.toggle('active', scoreBadgeVisible && scoreBadgeMode === 'aesthetic');
+        coBtn.classList.toggle('active', scoreBadgeVisible && scoreBadgeMode === 'composite');
+        // 隐藏态：当前模式按钮以暗色弱化高亮，另一按钮保持默认样式
+        aeBtn.classList.toggle('current-dim', !scoreBadgeVisible && scoreBadgeMode === 'aesthetic');
+        coBtn.classList.toggle('current-dim', !scoreBadgeVisible && scoreBadgeMode === 'composite');
     }
     updateSortScoreLabels();
 }
@@ -1434,16 +1457,93 @@ function updateSortScoreLabels() {
 }
 
 function setBadgeScoreMode(mode) {
-    if (scoreBadgeMode === mode) return;
-    scoreBadgeMode = mode;
+    if (scoreBadgeVisible && scoreBadgeMode === mode) {
+        // 再次点击当前激活的模式 → 隐藏分数标签
+        scoreBadgeVisible = false;
+    } else {
+        scoreBadgeMode = mode;
+        scoreBadgeVisible = true;
+    }
     updateBadgeScoreModeDisplay();
     renderPhotos(); // 角标与排序（按分时）同步刷新
-    var text = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
-    showToast('角标已切换为：' + text + '  ' + (currentSortMode.startsWith('score') ? '（排序已同步）' : ''));
+    if (!scoreBadgeVisible) {
+        showToast('已隐藏分数标签');
+    } else {
+        var text = scoreBadgeMode === 'composite' ? '综合评分' : '美学评分';
+        showToast('角标已切换为：' + text + '  ' + (currentSortMode.startsWith('score') ? '（排序已同步）' : ''));
+    }
 }
 
 function cycleBadgeScoreMode() {
+    if (!scoreBadgeVisible) { setBadgeScoreMode(scoreBadgeMode); return; }
     setBadgeScoreMode(scoreBadgeMode === 'aesthetic' ? 'composite' : 'aesthetic');
+}
+
+// ========== 分数标签配色区间配置 ==========
+function renderScoreTierConfig() {
+    var b = scoreTierBounds;
+    var bar = document.getElementById('scoreTierBar');
+    if (bar) {
+        // 从低到高（左→右）：粉 0~t3 / 黄 t3~t2 / 绿 t2~t1 / 蓝 t1~100
+        var segs = [
+            { cls: 'tier-pink', from: 0, to: b.t3, name: '粉' },
+            { cls: 'tier-yellow', from: b.t3, to: b.t2, name: '黄' },
+            { cls: 'tier-green', from: b.t2, to: b.t1, name: '绿' },
+            { cls: 'tier-blue', from: b.t1, to: 100, name: '蓝' }
+        ];
+        bar.innerHTML = segs.map(function(s) {
+            var w = s.to - s.from;
+            var label = w >= 12 ? (s.from + '–' + s.to) : '';
+            return '<div class="score-tier-seg ' + s.cls + '" style="width:' + w + '%">' + label + '</div>';
+        }).join('');
+    }
+    setTierHandlePos('tierHandle1', b.t1);
+    setTierHandlePos('tierHandle2', b.t2);
+    setTierHandlePos('tierHandle3', b.t3);
+}
+
+function setTierHandlePos(id, val) {
+    var el = document.getElementById(id);
+    if (el) el.style.left = val + '%';
+}
+
+// 应用分界值并维持 t3 <= t2 <= t1（互斥且覆盖 0-100）；无变化则跳过刷新
+function applyTierBound(idx, v) {
+    v = Math.max(0, Math.min(100, Math.round(v)));
+    var b = scoreTierBounds, prev;
+    if (idx === 1) { prev = b.t1; b.t1 = Math.max(v, b.t2); if (b.t1 === prev) return; }
+    else if (idx === 2) { prev = b.t2; b.t2 = Math.min(Math.max(v, b.t3), b.t1); if (b.t2 === prev) return; }
+    else if (idx === 3) { prev = b.t3; b.t3 = Math.min(v, b.t2); if (b.t3 === prev) return; }
+    renderScoreTierConfig();
+    renderPhotos();
+}
+
+function startTierDrag(e, idx) {
+    e.preventDefault();
+    var wrap = document.getElementById('scoreTierBarWrap');
+    if (!wrap) return;
+    var handle = document.getElementById('tierHandle' + idx);
+    if (handle) handle.classList.add('dragging');
+    function move(ev) {
+        var rect = wrap.getBoundingClientRect();
+        if (rect.width <= 0) return;
+        var pct = ((ev.clientX - rect.left) / rect.width) * 100;
+        applyTierBound(idx, pct);
+    }
+    function up() {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        if (handle) handle.classList.remove('dragging');
+    }
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+}
+
+function resetScoreTierBounds() {
+    scoreTierBounds = { t1: 80, t2: 60, t3: 40 };
+    renderScoreTierConfig();
+    renderPhotos();
+    showToast('已恢复默认分数区间');
 }
 
 // ========== 主题切换：跟随系统 / 浅色 / 深色（默认跟随系统） ==========
