@@ -19,7 +19,7 @@
     <header class="top-bar">
         <div class="top-bar-left">
             <div class="app-logo">
-                <i class="fas fa-camera"></i>
+                <button class="app-logo-btn" id="appLogoBtn" onclick="toggleSidebarInstant()" title="显示 / 隐藏侧边栏"><i class="fas fa-camera"></i></button>
                 <span>MantaPhotos</span>
             </div>
             <nav class="nav-tabs">
@@ -35,6 +35,30 @@
             <kbd>⌘K</kbd>
         </button>
         <div class="top-bar-right">
+            <!-- AI 分析进度：精简版常驻，悬浮向下展开完整版 -->
+            <div class="ai-progress-widget state-running" id="aiProgressWidget">
+                <div class="ai-mini">
+                    <i id="aiMiniStateIcon" class="fas fa-spinner fa-spin ai-mini-state"></i>
+                    <div class="ai-mini-bar"><div class="ai-mini-fill" id="aiMiniFill" style="width: 0%"></div></div>
+                    <span class="ai-mini-pct" id="aiMiniPct">0.0%</span>
+                    <button class="ai-mini-btn" onclick="togglePauseAnalysis()" title="暂停 / 继续"><i id="aiMiniPauseIcon" class="fas fa-pause"></i></button>
+                    <button class="ai-mini-btn" onclick="stopAnalysis()" title="停止"><i class="fas fa-stop"></i></button>
+                </div>
+                <div class="ai-progress-popover">
+                    <div class="ai-progress state-running" id="aiProgressCard">
+                        <div class="ai-progress-header">
+                            <div class="ai-progress-title"><i id="aiProgressStateIcon" class="fas fa-spinner fa-spin"></i> 照片分析</div>
+                            <div class="ai-progress-status" id="aiProgressStatus">分析中</div>
+                        </div>
+                        <div class="ai-progress-bar"><div class="ai-progress-fill" id="aiProgressFill" style="width: 0%"></div></div>
+                        <div class="ai-progress-info"><span id="aiProgressNumbers">0 / 45,678</span><span id="aiProgressPct">0.0%</span></div>
+                        <div class="ai-control-btn">
+                            <button class="btn-pause" onclick="togglePauseAnalysis()"><i id="aiPauseBtnIcon" class="fas fa-pause"></i> <span id="aiPauseBtnText">暂停</span></button>
+                            <button class="btn-stop" onclick="stopAnalysis()"><i class="fas fa-stop"></i> 停止</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <button class="icon-btn" onclick="toggleTheme()" title="主题切换"><i class="fas fa-moon"></i></button>
             <button class="icon-btn" title="通知"><i class="fas fa-bell"></i></button>
         </div>
@@ -52,46 +76,98 @@
         </button>
         <!-- 侧边栏面板 -->
         <aside class="sidebar" id="sidebar">
+        <!-- 类型（单选） -->
         <div class="sidebar-section">
-            <div class="sidebar-title">标签筛选</div>
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">类型</span>
+                <button class="sidebar-clear" id="sidebarMediaTypeClear" onclick="clearSidebarMediaType()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
+            <div class="sidebar-qf-cloud" id="sidebarMediaTypeChips"></div>
+        </div>
+        <!-- 评分（含高分/废片快捷） -->
+        <div class="sidebar-section">
+            <div class="sidebar-title">评分</div>
+            <div class="sidebar-score-filter">
+                <div class="ssf-header">
+                    <i class="fas fa-camera-retro ssf-dim-icon" id="ssfDimIcon"></i>
+                    <span class="ssf-dimension" id="ssfDimLabel">美学</span>
+                    <div class="ssf-op-toggle">
+                        <button class="ssf-op active" id="ssfOpGt" onclick="setSsfOp('gt')"><i class="fas fa-greater-than"></i></button>
+                        <button class="ssf-op" id="ssfOpLt" onclick="setSsfOp('lt')"><i class="fas fa-less-than"></i></button>
+                    </div>
+                    <span class="ssf-value-display" id="ssfValueDisplay">0</span>
+                    <button class="ssf-reset" id="ssfResetBtn" onclick="resetSsf()" title="清除筛选"><i class="fas fa-times"></i></button>
+                </div>
+                <input type="range" min="0" max="100" value="0" class="ssf-slider" id="ssfSlider" oninput="onSsfSlider(this.value)">
+                <div class="ssf-track-labels"><span>0</span><span>50</span><span>100</span></div>
+            </div>
+            <div class="ssf-shortcuts">
+                <button class="ssf-shortcut" onclick="setSsfQuickScore('highScore')" title="美学分 ≥ 最高档分界线">
+                    <i class="fas fa-star"></i> 高分照片
+                </button>
+                <button class="ssf-shortcut" onclick="setSsfQuickScore('lowScore')" title="美学分 &lt; 最低档分界线">
+                    <i class="fas fa-arrow-trend-down"></i> 低分照片
+                </button>
+            </div>
+        </div>
+        <!-- 时间 -->
+        <div class="sidebar-section">
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">时间</span>
+                <button class="sidebar-clear" id="sidebarTimeClear" onclick="clearSidebarTime()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
+            <div class="sidebar-qf-cloud" id="sidebarTimeChips"></div>
+        </div>
+        <!-- 状态（单选，仅收藏/重复） -->
+        <div class="sidebar-section">
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">状态</span>
+                <button class="sidebar-clear" id="sidebarStatusClear" onclick="clearQuickFilter()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
+            <div class="sidebar-item" data-quick="favorite" onclick="applyQuickFilter('favorite')"><i class="fas fa-heart"></i> 我的收藏</div>
+            <div class="sidebar-item" data-quick="duplicate" onclick="applyQuickFilter('duplicate')" title="存在重复或相似的照片、视频"><i class="fas fa-copy"></i> 重复/相似</div>
+            <div class="sidebar-item" data-quick="trash" onclick="applyQuickFilter('trash')" title="移入废片篓的照片，确认后删除"><i class="fas fa-trash-can"></i> 废片篓</div>
+        </div>
+        <!-- 设备与来源（单选） -->
+        <div class="sidebar-section">
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">设备与来源</span>
+                <button class="sidebar-clear" id="sidebarSourceClear" onclick="clearSidebarSource()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
+            <div class="sidebar-qf-cloud" id="sidebarSourceChips"></div>
+        </div>
+        <!-- 人物（多选+搜索） -->
+        <div class="sidebar-section">
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">人物</span>
+                <button class="sidebar-clear" id="sidebarPeopleClear" onclick="clearSidebarPeople()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
+            <div class="sidebar-people-search">
+                <i class="fas fa-search"></i>
+                <input type="text" placeholder="搜索人物…" id="sidebarPeopleSearch" oninput="onSidebarPeopleSearch(this.value)">
+            </div>
+            <div class="sidebar-qf-cloud" id="sidebarPeopleChips"></div>
+        </div>
+        <!-- 标签（单选，无"全部"） -->
+        <div class="sidebar-section">
+            <div class="sidebar-title-row">
+                <span class="sidebar-title">标签</span>
+                <button class="sidebar-clear" id="sidebarTagClear" onclick="clearSidebarTag()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+            </div>
             <div class="sidebar-tag-search">
                 <i class="fas fa-search"></i>
                 <input type="text" placeholder="搜索标签..." id="tagSearch">
             </div>
             <div class="sidebar-tag-cloud" id="tagCloud">
-                <span class="sidebar-tag-item active" data-tag="all" onclick="toggleSidebarTag(this)"><i class="fas fa-image"></i> 全部 <span class="count">48</span></span>
-                <span class="sidebar-tag-item" data-tag="风景" onclick="toggleSidebarTag(this)"><i class="fas fa-mountain"></i> 风景 <span class="count">12</span></span>
-                <span class="sidebar-tag-item" data-tag="人物" onclick="toggleSidebarTag(this)"><i class="fas fa-user"></i> 人物 <span class="count">8</span></span>
-                <span class="sidebar-tag-item" data-tag="建筑" onclick="toggleSidebarTag(this)"><i class="fas fa-building"></i> 建筑 <span class="count">6</span></span>
-                <span class="sidebar-tag-item" data-tag="美食" onclick="toggleSidebarTag(this)"><i class="fas fa-utensils"></i> 美食 <span class="count">5</span></span>
-                <span class="sidebar-tag-item" data-tag="旅行" onclick="toggleSidebarTag(this)"><i class="fas fa-plane"></i> 旅行 <span class="count">4</span></span>
-                <span class="sidebar-tag-item" data-tag="宠物" onclick="toggleSidebarTag(this)"><i class="fas fa-paw"></i> 宠物 <span class="count">7</span></span>
-                <span class="sidebar-tag-item" data-tag="夜景" onclick="toggleSidebarTag(this)"><i class="fas fa-moon"></i> 夜景 <span class="count">6</span></span>
+                <span class="sidebar-tag-item" data-tag="风景" onclick="toggleSidebarTag(this)"><i class="fas fa-mountain"></i> 风景</span>
+                <span class="sidebar-tag-item" data-tag="人物" onclick="toggleSidebarTag(this)"><i class="fas fa-user"></i> 人物</span>
+                <span class="sidebar-tag-item" data-tag="建筑" onclick="toggleSidebarTag(this)"><i class="fas fa-building"></i> 建筑</span>
+                <span class="sidebar-tag-item" data-tag="美食" onclick="toggleSidebarTag(this)"><i class="fas fa-utensils"></i> 美食</span>
+                <span class="sidebar-tag-item" data-tag="旅行" onclick="toggleSidebarTag(this)"><i class="fas fa-plane"></i> 旅行</span>
                 <button class="sidebar-more-btn" id="sidebarMoreBtn" onclick="showMoreTags()">
                     <i class="fas fa-chevron-down" id="sidebarMoreIcon"></i>
                     <span id="sidebarMoreText">更多</span>
                 </button>
-            </div>
-        </div>
-        <div class="sidebar-section">
-            <div class="sidebar-title">快捷操作</div>
-            <div class="sidebar-item" data-quick="favorite" onclick="applyQuickFilter('favorite')"><i class="fas fa-heart"></i> 我的收藏 <span class="count">23</span></div>
-            <div class="sidebar-item" data-quick="waste" onclick="applyQuickFilter('waste')"><i class="fas fa-trash"></i> 废片篓 <span class="count">156</span></div>
-            <div class="sidebar-item" data-quick="highScore" onclick="applyQuickFilter('highScore')"><i class="fas fa-star"></i> 高分照片 <span class="count">8</span></div>
-        </div>
-        <div class="sidebar-section">
-            <div class="sidebar-title">AI 分析进度</div>
-            <div class="ai-progress state-running" id="aiProgressCard">
-                <div class="ai-progress-header">
-                    <div class="ai-progress-title"><i id="aiProgressStateIcon" class="fas fa-spinner fa-spin"></i> 照片分析</div>
-                    <div class="ai-progress-status" id="aiProgressStatus">分析中</div>
-                </div>
-                <div class="ai-progress-bar"><div class="ai-progress-fill" style="width: 45%"></div></div>
-                <div class="ai-progress-info"><span>12,345 / 45,678</span><span>27%</span></div>
-                <div class="ai-control-btn">
-                    <button class="btn-pause" onclick="togglePauseAnalysis()"><i id="aiPauseBtnIcon" class="fas fa-pause"></i> <span id="aiPauseBtnText">暂停</span></button>
-                    <button class="btn-stop" onclick="stopAnalysis()"><i class="fas fa-stop"></i> 停止</button>
-                </div>
             </div>
         </div>
         </aside><!-- /.sidebar -->
@@ -104,7 +180,7 @@
             <div class="page-header">
                 <div class="page-header-left">
                     <h1 class="page-title">照片</h1>
-                    <span class="photo-count" id="photoCount">48 张照片</span>
+                    <span class="photo-count" id="photoCount">128 张照片</span>
                 </div>
                 <div class="page-actions">
                     <div class="zoom-ctrl" title="调节照片尺寸">
@@ -134,6 +210,12 @@
                 <button class="find-banner-edit" onclick="openFind()"><i class="fas fa-sliders-h"></i> 调整</button>
                 <button class="find-banner-clear" onclick="clearFindFromWall()"><i class="fas fa-times"></i> 清除</button>
             </div>
+            <div class="trash-banner" id="trashBanner">
+                <i class="fas fa-trash-can"></i>
+                <span class="trash-banner-text">废片篓 <strong id="trashBannerCount">0</strong> 项 · 清空后将永久删除，不可恢复</span>
+                <button class="trash-banner-restore" onclick="restoreAllTrash()"><i class="fas fa-trash-arrow-up"></i> 全部移出</button>
+                <button class="trash-banner-empty" onclick="emptyTrash()"><i class="fas fa-trash"></i> 清空废片篓</button>
+            </div>
             <div class="photo-grid" id="photoGrid"></div>
         </div>
 
@@ -142,17 +224,34 @@
             <div class="page-header">
                 <div class="page-header-left">
                     <h1 class="page-title">时间线</h1>
+                    <span class="photo-count" id="timelinePhotoCount"></span>
                 </div>
                 <div class="page-actions">
-                    <div class="timeline-year-nav">
-                        <button type="button" class="year-btn" onclick="navigateYear(-1)"><i class="fas fa-chevron-left"></i></button>
-                        <select class="year-select" id="yearSelect" onchange="selectYear(this.value)"></select>
-                        <button type="button" class="year-btn" onclick="navigateYear(1)"><i class="fas fa-chevron-right"></i></button>
-                    </div>
                     <button type="button" class="btn btn-secondary" onclick="showToast('地图视图开发中')"><i class="fas fa-map-marker-alt"></i> 地图视图</button>
                 </div>
             </div>
-            <div class="timeline" id="timelineContainer"></div>
+            <!-- 搜索栏 -->
+            <div class="tl-search-bar" id="tlSearchBar">
+                <i class="fas fa-search tl-sb-icon"></i>
+                <input type="text" class="tl-sb-input" id="tlSearchInput" placeholder="搜索事件、地名或年份…" oninput="searchTimeline(this.value)" autocomplete="off">
+                <button class="tl-sb-clear" id="tlSearchClear" onclick="clearTimelineSearch()" title="清除搜索"><i class="fas fa-times-circle"></i></button>
+            </div>
+            <!-- 年份快速跳转（右侧固定） -->
+            <div id="tlYearIndex" class="tl-year-index"></div>
+            <!-- 整体时间线（所有年份连续滚动） -->
+            <div id="timelineContainer"></div>
+        </div>
+
+        <!-- 事件详情页（点击时间线条目进入） -->
+        <div class="page" id="page-event">
+            <div class="page-header">
+                <div class="page-header-left">
+                    <button class="btn btn-ghost" onclick="navigateToPage('timeline')" style="padding:8px 12px;"><i class="fas fa-chevron-left"></i> 时间线</button>
+                    <h1 class="page-title" id="eventPageTitle">事件</h1>
+                    <span class="photo-count" id="eventPhotoCount"></span>
+                </div>
+            </div>
+            <div class="photo-grid" id="eventPhotoGrid"></div>
         </div>
 
         <!-- 报告页 -->
@@ -171,41 +270,76 @@
             <div class="page-header">
                 <h1 class="page-title">设置</h1>
             </div>
+            <!-- 照片源 -->
+            <div class="settings-group">
+                <div class="settings-group-title">照片源</div>
+                <div class="settings-item">
+                    <div class="settings-item-left">
+                        <div class="settings-item-icon"><i class="fab fa-apple"></i></div>
+                        <div class="settings-item-text">
+                            <h4>macOS 照片资源库</h4>
+                            <p>使用系统「照片」App 的资源库（仅 macOS 应用可用）</p>
+                        </div>
+                    </div>
+                    <div class="settings-item-right">
+                        <label class="ios-toggle">
+                            <input type="checkbox" id="macPhotosEnabled" checked disabled>
+                            <span class="ios-toggle-knob" title="仅 macOS 应用可用，Demo 中默认开启"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-left">
+                        <div class="settings-item-icon"><i class="fas fa-folder-open"></i></div>
+                        <div class="settings-item-text">
+                            <h4>本地目录（最多 20 个）</h4>
+                            <p id="localDirDesc">未添加目录 · 选择后扫描并导入目录下全部照片/视频</p>
+                        </div>
+                    </div>
+                    <div class="settings-item-right" style="gap:8px">
+                        <button class="btn btn-ghost" onclick="toggleLocalDirPanel()" id="manageDirBtn" style="display:none"><i class="fas fa-list"></i> 管理目录</button>
+                        <button class="btn btn-secondary" onclick="pickLocalDirectory()" id="addDirBtn"><i class="fas fa-plus"></i> 添加</button>
+                    </div>
+                </div>
+                <div class="local-dir-list" id="localDirList" style="display:none"></div>
+                <!-- 隐藏的目录选择器 -->
+                <input type="file" id="dirPicker" webkitdirectory multiple accept="image/*,video/*" style="display:none" onchange="onDirSelected(this)">
+            </div>
             <div class="settings-group">
                 <div class="settings-group-title">AI 模型</div>
                 <div class="model-list">
                     <div class="model-item" data-model="Qwen2.5-VL-3B">
                         <div class="model-info">
-                            <div class="model-name">Qwen2.5-VL-3B <span class="badge">快速</span></div>
-                            <div class="model-size">约 6GB · 适合日常使用</div>
+                            <div class="model-name">Qwen2.5-VL-3B <span class="badge">轻量</span></div>
+                            <div class="model-size">约 6GB · 上一代轻量模型，适合 8GB 内存 Mac</div>
                         </div>
                         <button class="model-action download" onclick="setCurrentModel('Qwen2.5-VL-3B', event)">下载</button>
                     </div>
                     <div class="model-item" data-model="Qwen2.5-VL-7B">
                         <div class="model-info">
                             <div class="model-name">Qwen2.5-VL-7B <span class="badge">均衡</span></div>
-                            <div class="model-size">约 12GB · 高质量分析</div>
+                            <div class="model-size">约 12GB · 上一代均衡模型，适合 16GB 内存 Mac</div>
                         </div>
                         <button class="model-action download" onclick="setCurrentModel('Qwen2.5-VL-7B', event)">下载</button>
                     </div>
                     <div class="model-item" data-model="Qwen3-VL-4B">
                         <div class="model-info">
-                            <div class="model-name">Qwen3-VL-4B <span class="badge">⭐ 默认</span></div>
-                            <div class="model-size">约 8GB · 推荐使用</div>
+                            <div class="model-name">Qwen3-VL-4B <span class="badge">快速</span></div>
+                            <div class="model-size">约 8GB · 新一代快速模型，适合 16GB 内存 Mac</div>
                         </div>
-                        <button class="model-action using" onclick="setCurrentModel('Qwen3-VL-4B', event)"><i class="fas fa-check"></i> 使用中</button>
+                        <button class="model-action download" onclick="setCurrentModel('Qwen3-VL-4B', event)">下载</button>
                     </div>
                     <div class="model-item" data-model="Qwen3-VL-8B">
                         <div class="model-info">
-                            <div class="model-name">Qwen3-VL-8B</div>
-                            <div class="model-size">约 14GB · 高质量需求</div>
+                            <div class="model-name">Qwen3-VL-8B <span class="badge">⭐ 推荐</span></div>
+                            <div class="model-size">约 14GB · 新一代均衡模型，分析质量与速度最优，推荐 32GB 内存 Mac</div>
                         </div>
-                        <button class="model-action download" onclick="setCurrentModel('Qwen3-VL-8B', event)">下载</button>
+                        <button class="model-action using" onclick="setCurrentModel('Qwen3-VL-8B', event)"><i class="fas fa-check"></i> 使用中</button>
                     </div>
                     <div class="model-item" data-model="Qwen3-VL-30B-A3B">
                         <div class="model-info">
                             <div class="model-name">Qwen3-VL-30B-A3B <span class="badge">旗舰</span></div>
-                            <div class="model-size">约 18GB · 最高质量 (需 M3 Max)</div>
+                            <div class="model-size">约 18GB · 旗舰模型，最高分析质量，需 M3 Max / M4 Max 及以上</div>
                         </div>
                         <button class="model-action download" onclick="setCurrentModel('Qwen3-VL-30B-A3B', event)">下载</button>
                     </div>
@@ -363,18 +497,24 @@
             </div>
 
             <div class="find-count-bar">
-                <span class="find-count" id="findCount">全部 48 张</span>
+                <span class="find-count" id="findCount">全部 128 张</span>
                 <span class="find-count-hint"><i class="fas fa-bolt"></i> 照片页将按条件实时更新</span>
             </div>
 
             <div class="find-body">
                 <div class="find-filters" id="findFilters">
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-photo-film"></i> 媒体类型</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-photo-film"></i> 媒体类型</span>
+                            <button class="find-section-clear" id="findMediaClear" onclick="clearFindMedia()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-chip-row" id="findMediaChips"></div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-star"></i> 评分</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-star"></i> 评分</span>
+                            <button class="find-section-clear" id="findScoreClear" onclick="clearFindScore()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-score-editor">
                             <div class="score-dimension-chips" id="findScoreMetricChips">
                                 <button type="button" class="score-dimension-chip active" data-editor-metric="aesthetics" onclick="setFindScoreEditorMetric('aesthetics')">美学</button>
@@ -399,7 +539,10 @@
                         </div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-calendar"></i> 时间范围</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-calendar"></i> 时间范围</span>
+                            <button class="find-section-clear" id="findDateClear" onclick="clearDateRange()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="date-filter-container">
                             <div class="date-filter-row">
                                 <span class="date-filter-label"><i class="fas fa-calendar-day"></i></span>
@@ -451,20 +594,38 @@
                         </div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-sliders-h"></i> 状态与来源</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-sliders-h"></i> 状态</span>
+                            <button class="find-section-clear" id="findStatusClear" onclick="clearFindStatus()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-chip-row" id="findStatusChips"></div>
-                        <div class="find-chip-row" id="findDeviceChips" style="margin-top:8px;"></div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-map-marker-alt"></i> 地点</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-camera"></i> 设备与来源</span>
+                            <button class="find-section-clear" id="findSourceClear" onclick="clearFindSource()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
+                        <div class="find-chip-row" id="findSourceChips"></div>
+                    </div>
+                    <div class="find-section">
+                        <div class="find-section-label">
+                            <span><i class="fas fa-map-marker-alt"></i> 地点</span>
+                            <button class="find-section-clear" id="findLocationClear" onclick="clearFindLocations()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-chip-row" id="findLocationChips"></div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-user"></i> 人物</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-user"></i> 人物</span>
+                            <button class="find-section-clear" id="findPeopleClear" onclick="clearFindPeople()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-chip-row" id="findPeopleChips"></div>
                     </div>
                     <div class="find-section">
-                        <div class="find-section-label"><i class="fas fa-tags"></i> 标签</div>
+                        <div class="find-section-label">
+                            <span><i class="fas fa-tags"></i> 标签</span>
+                            <button class="find-section-clear" id="findTagClear" onclick="clearFindTags()" style="display:none;"><i class="fas fa-times"></i> 清空</button>
+                        </div>
                         <div class="find-chip-row" id="findTagChips"></div>
                     </div>
                 </div>
@@ -513,48 +674,50 @@
         </div>
     </div>
 
-    <!-- 照片详情弹窗 -->
-    <div class="modal-overlay" id="photoDetailModal">
-        <div class="modal photo-detail-modal">
-            <div class="photo-detail-header">
-                <div>
-                    <h2 class="modal-title" id="detailTitle" style="margin:0;"><i class="fas fa-image" style="color:var(--accent-purple);"></i> 照片详情</h2>
-                    <div class="photo-detail-subtitle" id="detailSubtitle">--</div>
-                </div>
-                <button class="icon-btn" onclick="closePhotoDetail()"><i class="fas fa-times"></i></button>
+    <!-- 全屏照片查看器 -->
+    <div class="photo-viewer" id="photoViewer">
+        <!-- 关闭 -->
+        <button class="viewer-close-btn" onclick="closePhotoViewer()" title="关闭 (Esc)"><i class="fas fa-times"></i></button>
+        <!-- 上/下张 -->
+        <button class="viewer-nav viewer-prev" id="viewerPrev" onclick="navigateViewer(-1)" title="上一张 (←)"><i class="fas fa-chevron-left"></i></button>
+        <button class="viewer-nav viewer-next" id="viewerNext" onclick="navigateViewer(1)" title="下一张 (→)"><i class="fas fa-chevron-right"></i></button>
+        <!-- 照片/视频 -->
+        <div class="viewer-media">
+            <img id="viewerImg" src="" alt="照片预览" draggable="false">
+            <!-- 媒体类型角标（Live / 视频） -->
+            <div class="viewer-media-badge" id="viewerMediaBadge" style="display:none;"></div>
+            <!-- 播放/暂停控制（视频、Live 照片） -->
+            <button class="viewer-play-btn" id="viewerPlayBtn" onclick="toggleViewerPlayback()" style="display:none;" title="播放 / 暂停 (空格)">
+                <i class="fas fa-play" id="viewerPlayIcon"></i>
+            </button>
+            <!-- 模拟播放进度条 -->
+            <div class="viewer-playbar" id="viewerPlaybar" style="display:none;"><div class="viewer-playbar-fill" id="viewerPlaybarFill"></div></div>
+        </div>
+        <!-- 底部栏：文件名 + 液态玻璃详情按钮 -->
+        <div class="viewer-bottom-bar">
+            <span class="viewer-bottom-filename" id="viewerFilename"></span>
+            <button class="viewer-info-btn" id="viewerInfoBtn" onclick="toggleViewerInfo()" title="详情 (i)">
+                <i class="fas fa-info-circle"></i> 详情 <kbd>i</kbd>
+            </button>
+        </div>
+        <!-- 右侧详情面板（滑入） -->
+        <div class="viewer-detail-panel" id="viewerDetailPanel">
+            <div class="viewer-detail-scroll" id="viewerDetailScroll">
+                <!-- 文件名 + 元数据 -->
+                <div id="viewerDetailHead"></div>
+                <!-- 评分 + 维度 -->
+                <div id="viewerScoreSection"></div>
+                <!-- 标签 -->
+                <div id="viewerTagsSection"></div>
+                <!-- 描述 + 日记 -->
+                <div id="viewerDescSection"></div>
+                <!-- 保留建议 + 相似组 -->
+                <div id="viewerAdviceSection"></div>
             </div>
-            <div class="photo-detail-body">
-                <div class="photo-detail-left">
-                    <img id="detailImage" src="" alt="照片详情">
-                    <div class="photo-detail-section">
-                        <h4>标签</h4>
-                        <div class="detail-tag-list" id="detailTagList"></div>
-                    </div>
-                    <div class="photo-detail-section">
-                        <h4>内容描述（≤300字）</h4>
-                        <p id="detailContentDescription" class="photo-detail-text"></p>
-                    </div>
-                    <div class="photo-detail-section">
-                        <h4>照片回忆（≤200字）</h4>
-                        <p id="detailPhotoDiary" class="photo-detail-text"></p>
-                    </div>
-                    <div class="photo-detail-section">
-                        <h4>相似组</h4>
-                        <p id="detailDuplicateInfo" class="photo-detail-text"></p>
-                    </div>
-                    <div class="photo-detail-section">
-                        <h4>保留建议</h4>
-                        <div id="detailRetentionAdvice" class="detail-advice"></div>
-                    </div>
-                </div>
-                <div class="photo-detail-right">
-                    <h4>维度分</h4>
-                    <div id="detailDimensionList"></div>
-                </div>
-            </div>
-            <div class="photo-detail-footer">
-                <button class="btn btn-secondary" onclick="toggleFavoriteCurrent()"><i class="fas fa-heart"></i> 收藏/取消收藏</button>
-                <button class="btn btn-danger" onclick="deleteCurrentPhoto()"><i class="fas fa-trash"></i> 删除此照片</button>
+            <div class="viewer-detail-actions">
+                <button class="btn btn-secondary" id="viewerFavBtn" onclick="toggleFavoriteCurrent()" title="收藏 / 取消收藏 (F)"><i class="fas fa-heart"></i> 收藏</button>
+                <button class="btn btn-secondary" id="viewerTrashBtn" onclick="moveCurrentToTrash()" title="移入 / 移出废片篓 (T)"><i class="fas fa-trash-can"></i> 废片篓</button>
+                <button class="btn btn-danger" onclick="deleteCurrentPhoto()" title="直接删除 (⌘D)"><i class="fas fa-trash"></i> 删除</button>
             </div>
         </div>
     </div>
@@ -562,8 +725,8 @@
     <!-- 删除确认模态框 -->
     <div class="modal-overlay" id="deleteModal">
         <div class="modal">
-            <h2 class="modal-title"><i class="fas fa-exclamation-triangle" style="color:var(--warning)"></i> 确认删除</h2>
-            <div class="modal-body">确定要删除选中的 <strong id="deleteCount">0</strong> 张照片吗？此操作不可撤销。</div>
+            <h2 class="modal-title" id="deleteModalTitle"><i class="fas fa-exclamation-triangle" style="color:var(--warning)"></i> 确认删除</h2>
+            <div class="modal-body" id="deleteModalBody">确定要删除选中的 <strong id="deleteCount">0</strong> 张照片吗？此操作不可撤销。</div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeDeleteModal()">取消</button>
                 <button class="btn btn-danger" onclick="confirmDelete()">确认删除</button>
