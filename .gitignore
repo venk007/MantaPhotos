@@ -21,6 +21,9 @@ credentials.json
 # Xcode (Swift 正式开发)
 build/
 DerivedData/
+.xcodebuild/
+**/.xcodebuild/
+*.noindex/
 *.xcuserstate
 *.xcscmblueprint
 xcuserdata/
@@ -35,6 +38,7 @@ xcuserdata/
 Packages/
 Package.resolved
 .swiftpm/
+SourcePackages/
 
 # Logs & temp
 *.log

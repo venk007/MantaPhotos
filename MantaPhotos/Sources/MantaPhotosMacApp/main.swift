@@ -1,0 +1,3 @@
+import MantaPhotosCore
+
+MantaPhotosApp.main()

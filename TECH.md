@@ -1,5 +1,9 @@
 # MantaPhotos - 技术设计与实现规格
 
+> ⚠️ **实际实现以 [`doc/Mac应用实现方案.md`](doc/Mac应用实现方案.md) 为准。**
+> 本文档（TECH.md）尚停留在早期版本，schema、模块划分与并发模型均已被实现方案文档取代。
+> 待 P0~P4 产品功能设计全部完成后，再将 `doc/Mac应用实现方案.md` 与最新技术设计统一同步回本文档。
+
 > **文档版本:** v0.0.7  
 > **创建日期:** 2026-05-26  
 > **最后更新:** 2026-05-28  
@@ -27,8 +31,8 @@
 │  │ ReportManager │ SearchEngine │ DuplicateDetector │   │
 │  └─────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │           ML Engine (MLX + CoreML)               │    │
-│  │    MLX-VLM (Qwen) │ Vision │ NaturalLanguage    │    │
+│  │       ML/Search Engine (Vision + Embedding)      │    │
+│  │  Vision │ EmbeddingProvider1536 │ sqlite-vec    │    │
 │  └─────────────────────────────────────────────────┘    │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐              │
 │  │  Photos  │ │  SQLite  │ │ Spotlight│              │
@@ -47,7 +51,9 @@
 | **设计语言** | Apple Liquid Glass | 最新 | macOS Tahoe 最新设计语言 |
 | **IDE** | Xcode | 16.5+ | macOS 26 开发必备 |
 | **照片库访问** | Photos Framework | 最新 | 原生系统框架 |
-| **AI 推理引擎** | **MLX-VLM** | 最新 | Apple Silicon 专用，支持 Qwen 系列 |
+| **P1 打分引擎** | Apple Vision | 最新 | 美学评分，截图强制 0 |
+| **P2 向量搜索** | EmbeddingProvider1536 + sqlite-vec | 最新 | 语义搜索、相似照片、以图搜图基础入口 |
+| **P4+ 自定义模型引擎** | MLX-VLM | 最新 | Apple Silicon 专用，支持 Qwen 系列；P4+ 待确认 |
 | **Vision 框架** | VisionKit | 最新 | 图像分析基础能力 |
 | **自然语言处理** | NaturalLanguage | 最新 | 文本分析、搜索匹配 |
 | **矢量存储** | SQLite.swift | 0.15+ | 本地元数据存储 |
@@ -56,7 +62,7 @@
 | **进程间通信** | AppKit (NSApplication) | 最新 | 菜单栏、托盘图标 |
 | **Markdown 渲染** | MarkdownUI / SwiftMarkdown | 最新 | 内嵌报告阅读器 |
 
-### 1.3 MLX-VLM 技术说明
+### 1.3 MLX-VLM 技术说明（P4+ 待确认）
 
 **什么是 MLX-VLM：**
 - Apple 开源的 Apple Silicon 专用 ML 推理框架
@@ -207,7 +213,7 @@
 │  └─────────┘  └─────────┘  └─────────┘  └─────────┘   │
 │                                                         │
 │  可配置: 1~4 个并行（默认2）                            │
-│  优先级: P0 > P1 > P2                                  │
+│  优先级: P0 无 AI；P1 打分；P2 向量搜索；P4+ 自定义模型分析 │
 │  同一资源: 不同任务类型不能同时执行                       │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -243,7 +249,7 @@
 
 3. 后台执行
    ├── 任务标记为 utility / userInitiated
-   └── 菜单栏 + 侧边栏同步进度
+   └── 菜单栏显示进度（侧边栏不展示 AI 分析进度）
 ```
 
 **断点续传：**
@@ -274,15 +280,17 @@ final_score = Σ (dimension_score × weight)
 5. 重复照片标记 is_duplicate = true，写入 duplicate_groups 表
 ```
 
-### 2.5 AI 推理管线 (PhotoAnalyzer)
+### 2.5 AI / 向量管线 (PhotoAnalyzer)
 
 | 阶段 | 实现 |
 |------|------|
 | 输入 | Photos Framework 读取缩略图/原件（本地可用资源） |
-| 推理 | MLX-VLM 多模态推理，按任务类型加载对应 Prompt |
-| 解析 | JSON Schema 校验 + 容错解析 |
-| 存储 | 写入 `photos` / `tags` / `custom_task_results` |
-| 索引 | 更新 Core Spotlight 条目（Phase 8） |
+| P1 打分 | Apple Vision 美学评分 |
+| P2 向量 | EmbeddingProvider1536 生成 text/image/video 向量，写入 sqlite-vec |
+| P4+ 自定义模型 | MLX-VLM 多模态推理，按任务类型加载对应 Prompt |
+| 解析 | P1/P2 使用结构化结果；P4+ 使用 JSON Schema 校验 + 容错解析 |
+| 存储 | 写入 `photo_scores` / `analysis_outputs` / `photo_embeddings`；P4+ 再扩展标签和自定义任务结果 |
+| 索引 | P2 更新向量索引；Core Spotlight 按阶段接入 |
 
 ### 2.6 模型下载管理器
 
@@ -338,7 +346,21 @@ final_score = Σ (dimension_score × weight)
 - [ ] 菜单栏集成（进度显示、暂停/继续）
 - [ ] Light/Dark Mode 支持
 
-### Phase 2：AI 推理引擎
+### Phase 2：性能、同步与生产化基础
+
+- [ ] 1 万 / 10 万资产性能压测
+- [ ] EmbeddingProvider1536（text/image/video）
+- [ ] sqlite-vec 集成与 `VectorIndex` Adapter
+- [ ] 语义搜索、相似照片、以图搜图基础入口
+- [ ] 向量召回 + SQL/FTS5 结构化过滤 + rerank
+- [ ] 照片库变化监听（PHPhotoLibraryChangeObserver）
+- [ ] iCloud 状态字段落库和查询展示
+- [ ] App 内废片篓标记、恢复、清空和真正删除确认流程
+- [ ] Core Spotlight 非 AI 基础索引
+- [ ] 真实非 AI 统计报告
+- [ ] 完整时间线页面（待 Demo 设计稳定后）
+
+### Phase 5+：AI 推理引擎（待确认）
 
 - [ ] MLX-VLM 集成（Core MLX-VLM 包接入）
 - [ ] 模型下载管理器（HuggingFace mlx-community）
@@ -351,7 +373,7 @@ final_score = Σ (dimension_score × weight)
 - [ ] 时间/事件分析引擎
 - [ ] 视频内容分析引擎
 
-### Phase 3：自定义提示词与任务
+### Phase 5+：自定义提示词与任务（待确认）
 
 - [ ] 提示词配置存储层（SQLite）
 - [ ] 内置提示词默认内容生成与存储
@@ -361,7 +383,7 @@ final_score = Σ (dimension_score × weight)
 - [ ] 自定义任务结果存储（custom_task_results 表）
 - [ ] 自定义指标字段与 AI 筛选集成
 
-### Phase 4：评分系统
+### Phase 5+：综合评分与重复检测（待确认）
 
 - [ ] 评分引擎核心（6维度加权计算）
 - [ ] 评分权重配置界面
@@ -370,10 +392,10 @@ final_score = Σ (dimension_score × weight)
 - [ ] 重复组管理 + 降分机制
 - [ ] 重复照片展示视图
 
-### Phase 5：任务调度系统
+### Phase 3：任务调度系统
 
 - [ ] 任务调度器核心（Actor 模型）
-- [ ] 任务优先级队列（P0/P1/P2）
+- [ ] 任务优先级队列（P1 visionAesthetics；P2 embedding/vector；P4+ 自定义模型任务待确认）
 - [ ] 并行任务控制（1~4 可配置）
 - [ ] 暂停/继续/停止功能
 - [ ] 断点续传（状态持久化到 SQLite）

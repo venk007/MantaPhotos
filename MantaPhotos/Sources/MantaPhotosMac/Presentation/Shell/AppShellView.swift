@@ -1,0 +1,433 @@
+import SwiftUI
+
+struct AppShellView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                TopBarView()
+                Divider()
+                ZStack(alignment: .leading) {
+                    routeView
+                    if appState.navigation.route == .photos {
+                        SidebarOverlayView()
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+                }
+                Divider()
+                BottomBarView()
+            }
+
+            if appState.navigation.isFindOverlayPresented {
+                FindOverlayView()
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(10)
+            }
+
+            if case .failed(let message) = appState.bootstrapStatus {
+                VStack {
+                    Spacer()
+                    Text(message)
+                        .font(.footnote)
+                        .padding(DesignSystem.Spacing.md)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+                        .padding()
+                }
+                .zIndex(20)
+            }
+        }
+        .animation(.snappy(duration: 0.18), value: appState.navigation.isFindOverlayPresented)
+        .animation(.snappy(duration: 0.2), value: appState.navigation.route)
+        .background(AppKeyboardShortcutView().environment(appState).frame(width: 0, height: 0))
+        .onChange(of: appState.navigation.route) { _, route in
+            if route != .photos {
+                appState.navigation.isSidebarExpanded = false
+                appState.library.closeViewer()
+            } else {
+                appState.navigation.isSidebarExpanded = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var routeView: some View {
+        switch appState.navigation.route {
+        case .photos:
+            PhotosPageView()
+        case .reports:
+            ReportsPageView()
+        case .timeline:
+            TimelinePlaceholderView()
+        case .settings:
+            SettingsPageView()
+        }
+    }
+}
+
+struct AppKeyboardShortcutView: NSViewRepresentable {
+    @Environment(AppState.self) private var appState
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(appState: appState)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.start(appState: appState)
+        return NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.appState = appState
+        context.coordinator.start(appState: appState)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        weak var appState: AppState?
+        private var monitor: Any?
+
+        init(appState: AppState) {
+            self.appState = appState
+        }
+
+        func start(appState: AppState) {
+            self.appState = appState
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let appState = self.appState else { return event }
+                let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let key = event.charactersIgnoringModifiers?.lowercased()
+
+                if modifiers.contains(.command), key == "k" {
+                    MainActor.assumeIsolated {
+                        appState.navigation.isFindOverlayPresented.toggle()
+                    }
+                    return nil
+                }
+
+                if event.keyCode == 53, MainActor.assumeIsolated({
+                    guard appState.navigation.isFindOverlayPresented else { return false }
+                    appState.navigation.isFindOverlayPresented = false
+                    return true
+                }) {
+                    return nil
+                }
+
+                return event
+            }
+        }
+
+        func stop() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            stop()
+        }
+    }
+}
+
+struct TopBarView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 18) {
+            HStack(spacing: 16) {
+                logoButton
+                navTabs
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+            searchEntry
+            Spacer(minLength: 0)
+            trailingControls
+        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .frame(height: DesignSystem.Metrics.topBarHeight)
+    }
+
+    private var logoButton: some View {
+        Button {
+            if appState.navigation.route == .photos {
+                appState.navigation.isSidebarExpanded.toggle()
+            } else {
+                appState.navigation.route = .photos
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "camera")
+                Text(appState.localized("MantaPhotos"))
+                    .font(.headline.weight(.semibold))
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Show or hide sidebar")
+    }
+
+    private var navTabs: some View {
+        HStack(spacing: 4) {
+            ForEach(AppRoute.allCases) { route in
+                topTab(route)
+            }
+        }
+    }
+
+    private var searchEntry: some View {
+        Button {
+            appState.navigation.isFindOverlayPresented.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                Text(appState.localized("Search photos"))
+                Text("⌘K")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(width: 330, height: 34)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(.white.opacity(0.18), lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var trailingControls: some View {
+        HStack(spacing: 12) {
+            AnalysisProgressView(progress: appState.analysis.analysisProgress)
+
+            Button {
+                appState.navigation.themeMode = appState.navigation.themeMode.nextMode
+            } label: {
+                Image(systemName: appState.navigation.themeMode.iconName)
+            }
+            .buttonStyle(.borderless)
+            .help("Theme")
+
+            Button {} label: {
+                Image(systemName: "bell")
+            }
+            .buttonStyle(.borderless)
+            .disabled(true)
+            .help("Notifications")
+        }
+    }
+
+    private func topTab(_ route: AppRoute) -> some View {
+        Button {
+            appState.navigation.route = route
+        } label: {
+            Label(appState.localized(route.localizationKey), systemImage: route.iconName)
+                .labelStyle(.titleAndIcon)
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .foregroundStyle(appState.navigation.route == route ? .primary : .secondary)
+                .background {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(appState.navigation.route == route ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear))
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SidebarOverlayView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SidebarView()
+                .frame(width: DesignSystem.Metrics.sidebarWidth)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(.white.opacity(0.18), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
+                .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
+
+            Button {
+                appState.navigation.isSidebarExpanded.toggle()
+            } label: {
+                Image(systemName: appState.navigation.isSidebarExpanded ? "chevron.left" : "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 20, height: 128)
+                    .background(.regularMaterial, in: UnevenRoundedRectangle(
+                        topLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
+                        bottomLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
+                        bottomTrailingRadius: 10,
+                        topTrailingRadius: 10
+                    ))
+            }
+            .buttonStyle(.plain)
+            .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
+        }
+        .padding(.leading, 16)
+        .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
+        .zIndex(5)
+    }
+}
+
+struct BottomBarView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack {
+            Text(statusText)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(gridStatusText)
+                .foregroundStyle(.secondary)
+        }
+        .font(.footnote)
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .frame(height: DesignSystem.Metrics.bottomBarHeight)
+    }
+
+    private var statusText: String {
+        switch appState.library.importProgress.phase {
+        case .initialImport, .backgroundImport:
+            "\(localizedImportMessage) \(appState.library.importProgress.imported)/\(appState.library.importProgress.total)"
+        case .completed:
+            appState.library.searchFilter.isEmpty ? appState.localized("Import complete") : appState.localized("Filters active")
+        case .denied:
+            appState.localized("Photos access needed")
+        case .failed:
+            localizedImportMessage
+        default:
+            appState.library.searchFilter.isEmpty ? appState.localized("No filters") : appState.localized("Filters active")
+        }
+    }
+
+    private var gridStatusText: String {
+        switch appState.navigation.appLanguage {
+        case .zhHans:
+            "网格 \(appState.navigation.gridLevel.rawValue) · \(appState.library.matchedPhotoCount.formatted()) 个匹配"
+        case .system where Locale.preferredLanguages.first?.hasPrefix("zh") == true:
+            "网格 \(appState.navigation.gridLevel.rawValue) · \(appState.library.matchedPhotoCount.formatted()) 个匹配"
+        default:
+            "Grid \(appState.navigation.gridLevel.rawValue) · \(appState.library.matchedPhotoCount.formatted()) matched"
+        }
+    }
+
+    private var localizedImportMessage: String {
+        switch appState.library.importProgress.message {
+        case "Requesting Photos access":
+            return appState.localized("Requesting Photos access")
+        case "Photos access is not authorized":
+            return appState.localized("Photos access is not authorized")
+        case "Import completed":
+            return appState.localized("Import complete")
+        case "Preparing recent photos":
+            return appState.localized("Preparing recent photos")
+        case "Importing library in background":
+            return appState.localized("Importing library in background")
+        default:
+            return appState.library.importProgress.message
+        }
+    }
+}
+
+struct AnalysisProgressView: View {
+    @Environment(AppState.self) private var appState
+    var progress: AnalysisProgress
+
+    var body: some View {
+        if progress.isRunning {
+            HStack(spacing: 8) {
+                ProgressView(value: Double(progress.completed), total: Double(max(progress.total, 1))) {
+                    Text(progress.status.displayName)
+                }
+                .frame(width: 170)
+
+                Text(progressText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 116, alignment: .trailing)
+
+                if progress.status == .paused {
+                    Button {
+                        appState.analysis.resumeAnalysis()
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .help("Resume scoring")
+                } else {
+                    Button {
+                        appState.analysis.pauseAnalysis()
+                    } label: {
+                        Image(systemName: "pause.fill")
+                    }
+                    .help("Pause scoring")
+                    .disabled(progress.status == .stopping)
+                }
+
+                Button {
+                    appState.analysis.stopAnalysis()
+                } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .help("Stop scoring")
+                .disabled(progress.status == .stopping)
+            }
+            .buttonStyle(.borderless)
+        } else if progress.failed > 0, progress.currentRunID != nil {
+            HStack(spacing: 8) {
+                Label("Failed \(progress.failed)", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    appState.analysis.retryFailedAnalysis()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Retry failed scoring tasks")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private var progressText: String {
+        if progress.failed > 0 {
+            return "\(progress.completed)/\(progress.total) · \(progress.failed) failed"
+        }
+        return "\(progress.completed)/\(progress.total)"
+    }
+}
+
+private extension AnalysisStatus {
+    var displayName: LocalizedStringKey {
+        switch self {
+        case .idle:
+            "Idle"
+        case .running:
+            "Scoring"
+        case .paused:
+            "Paused"
+        case .stopping:
+            "Stopping"
+        case .completed:
+            "Completed"
+        case .cancelled:
+            "Cancelled"
+        case .failed:
+            "Failed"
+        }
+    }
+}

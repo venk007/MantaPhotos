@@ -1,0 +1,57 @@
+# XcodeGen 工程描述 —— 正式 .xcodeproj 的唯一可维护来源。
+#
+# 设计取舍（乔布斯视角）：源码与依赖仍以 SwiftPM（Package.swift）为唯一事实来源，
+# App 壳层只编译一个入口文件并链接本地 Swift Package 产物 MantaPhotosCore，
+# 避免「同一份源码被工程和包各编译一次」导致的重复符号。
+# 这样既得到带 App Sandbox / 权限声明 / Hardened Runtime 的正式 .app bundle，
+# 又不必在 pbxproj 里手工维护文件列表。
+#
+# 生成方式：在 MantaPhotos/ 目录执行 `./Xcode/generate-xcodeproj.sh`
+# （或直接 `xcodegen generate`），随后用 Xcode 打开 MantaPhotos.xcodeproj。
+
+name: MantaPhotos
+
+options:
+  bundleIdPrefix: com.mantaphotos
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  MantaPhotos:
+    path: .
+
+targets:
+  MantaPhotosMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/MantaPhotosMacApp
+    dependencies:
+      - package: MantaPhotos
+        product: MantaPhotosCore
+    settings:
+      base:
+        PRODUCT_NAME: MantaPhotos
+        PRODUCT_BUNDLE_IDENTIFIER: com.mantaphotos.mac
+        MARKETING_VERSION: "0.0.16"
+        CURRENT_PROJECT_VERSION: "16"
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Xcode/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Xcode/MantaPhotosMac.entitlements
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: YES
+        COMBINE_HIDPI_IMAGES: YES
+        DEAD_CODE_STRIPPING: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
