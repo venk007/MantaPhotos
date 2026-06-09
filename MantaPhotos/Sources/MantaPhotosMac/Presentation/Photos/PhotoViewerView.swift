@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import AVKit
 import Photos
 import PhotosUI
@@ -10,7 +11,7 @@ struct PhotoViewerView: View {
     @State private var image: NSImage?
     @State private var player: AVPlayer?
     @State private var livePhoto: PHLivePhoto?
-    @State private var requestID: PHImageRequestID?
+    @State private var thumbnailToken: ThumbnailRequestToken?
     @State private var showsInfo = false
     @State private var showsDeleteConfirmation = false
     @State private var isPlaying = false
@@ -58,7 +59,7 @@ struct PhotoViewerView: View {
             requestMedia()
         }
         .onDisappear {
-            PhotoThumbnailProvider.shared.cancel(requestID)
+            PhotoThumbnailProvider.shared.cancel(thumbnailToken)
             player?.pause()
             player = nil
             livePhoto = nil
@@ -361,7 +362,7 @@ struct PhotoViewerView: View {
     }
 
     private func requestMedia() {
-        PhotoThumbnailProvider.shared.cancel(requestID)
+        PhotoThumbnailProvider.shared.cancel(thumbnailToken)
         player?.pause()
         image = nil
         player = nil
@@ -381,8 +382,8 @@ struct PhotoViewerView: View {
 
     private func requestStillPreview() {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        requestID = PhotoThumbnailProvider.shared.requestThumbnail(
-            localIdentifier: result.asset.localIdentifier,
+        thumbnailToken = PhotoThumbnailProvider.shared.requestThumbnail(
+            for: result.asset,
             targetSize: CGSize(width: 1600 * scale, height: 1600 * scale)
         ) { image in
             self.image = image
@@ -390,6 +391,16 @@ struct PhotoViewerView: View {
     }
 
     private func requestVideo() {
+        // 本地 / 外部源：直接用文件 URL 构建 AVURLAsset（根目录安全作用域已开启）。
+        if !result.asset.isSystemPhotos {
+            if let url = PhotoSourceRegistry.shared.fileURL(for: result.asset) {
+                player = AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url)))
+            } else {
+                requestStillPreview()
+            }
+            return
+        }
+
         Task {
             do {
                 let avAsset = try await PhotoLibraryAdapter().requestAVAsset(localIdentifier: result.asset.localIdentifier)

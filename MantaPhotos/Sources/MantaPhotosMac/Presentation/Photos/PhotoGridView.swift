@@ -48,7 +48,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
     private var badgeMetric: BadgeMetric = .aesthetic
     private var selectedIDs: Set<String> = []
     private var sidebarExpanded = true
-    private var preheatedLocalIdentifiers: Set<String> = []
+    private var preheatedAssets: [String: PhotoAsset] = [:]
     private var preheatTargetSize: CGSize = .zero
     private var scrollBaselineY: CGFloat = 0
     private var sidebarHiddenByScroll = false
@@ -278,50 +278,54 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         lastPreheatOffsetY = scrollView.contentView.bounds.origin.y
         let visibleRect = scrollView.contentView.bounds
         let preheatRect = visibleRect.insetBy(dx: 0, dy: -visibleRect.height * 0.75)
-        let localIdentifiers = localIdentifiersForItems(in: preheatRect)
-        let nextPreheated = Set(localIdentifiers)
+        let assetsInRect = assetsForItems(in: preheatRect)
+        let nextByID = Dictionary(assetsInRect.map { ($0.id, $0) }, uniquingKeysWith: { lhs, _ in lhs })
+        let nextIDs = Set(nextByID.keys)
+        let currentIDs = Set(preheatedAssets.keys)
         let targetSize = thumbnailTargetSize()
 
         if preheatTargetSize != .zero, preheatTargetSize != targetSize {
             PhotoThumbnailProvider.shared.stopCaching(
-                localIdentifiers: Array(preheatedLocalIdentifiers),
+                assets: Array(preheatedAssets.values),
                 targetSize: preheatTargetSize
             )
-            preheatedLocalIdentifiers = []
+            preheatedAssets = [:]
         }
 
-        let added = nextPreheated.subtracting(preheatedLocalIdentifiers)
-        let removed = preheatedLocalIdentifiers.subtracting(nextPreheated)
+        let addedIDs = nextIDs.subtracting(currentIDs)
+        let removedIDs = currentIDs.subtracting(nextIDs)
 
-        if !removed.isEmpty {
+        if !removedIDs.isEmpty {
+            let removedAssets = removedIDs.compactMap { preheatedAssets[$0] }
             PhotoThumbnailProvider.shared.stopCaching(
-                localIdentifiers: Array(removed),
+                assets: removedAssets,
                 targetSize: preheatTargetSize == .zero ? targetSize : preheatTargetSize
             )
         }
 
-        if !added.isEmpty {
+        if !addedIDs.isEmpty {
+            let addedAssets = addedIDs.compactMap { nextByID[$0] }
             PhotoThumbnailProvider.shared.startCaching(
-                localIdentifiers: Array(added),
+                assets: addedAssets,
                 targetSize: targetSize
             )
         }
 
-        preheatedLocalIdentifiers = nextPreheated
+        preheatedAssets = nextByID
         preheatTargetSize = targetSize
     }
 
     private func stopAllThumbnailPreheating() {
-        guard !preheatedLocalIdentifiers.isEmpty else { return }
+        guard !preheatedAssets.isEmpty else { return }
         PhotoThumbnailProvider.shared.stopCaching(
-            localIdentifiers: Array(preheatedLocalIdentifiers),
+            assets: Array(preheatedAssets.values),
             targetSize: preheatTargetSize == .zero ? thumbnailTargetSize() : preheatTargetSize
         )
-        preheatedLocalIdentifiers = []
+        preheatedAssets = [:]
         preheatTargetSize = .zero
     }
 
-    private func localIdentifiersForItems(in rect: NSRect) -> [String] {
+    private func assetsForItems(in rect: NSRect) -> [PhotoAsset] {
         let attributes = collectionView.collectionViewLayout?.layoutAttributesForElements(in: rect) ?? []
         let indexes = attributes
             .compactMap { $0.indexPath?.item }
@@ -331,10 +335,10 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
             return collectionView.indexPathsForVisibleItems()
                 .map(\.item)
                 .filter { items.indices.contains($0) }
-                .map { items[$0].asset.localIdentifier }
+                .map { items[$0].asset }
         }
 
-        return indexes.map { items[$0].asset.localIdentifier }
+        return indexes.map { items[$0].asset }
     }
 
     private func updateSidebarForScroll() {
@@ -388,7 +392,7 @@ final class PhotoGridItem: NSCollectionViewItem {
     private let scoreLabel = NSTextField(labelWithString: "")
     private let mediaBadge = NSTextField(labelWithString: "")
     private let selectionRing = CALayer()
-    private var requestID: PHImageRequestID?
+    private var thumbnailToken: ThumbnailRequestToken?
 
     override func loadView() {
         view = NSView()
@@ -455,8 +459,8 @@ final class PhotoGridItem: NSCollectionViewItem {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        PhotoThumbnailProvider.shared.cancel(requestID)
-        requestID = nil
+        PhotoThumbnailProvider.shared.cancel(thumbnailToken)
+        thumbnailToken = nil
         thumbnailView.layer?.contents = nil
         representedObject = nil
     }
@@ -474,8 +478,8 @@ final class PhotoGridItem: NSCollectionViewItem {
         configureScore(result: result, badgeMetric: badgeMetric)
         configureMediaBadge(result.asset.mediaType)
 
-        requestID = PhotoThumbnailProvider.shared.requestThumbnail(
-            localIdentifier: result.asset.localIdentifier,
+        thumbnailToken = PhotoThumbnailProvider.shared.requestThumbnail(
+            for: result.asset,
             targetSize: targetSize
         ) { [weak self] image in
             guard let self, self.representedObject as? String == result.id else { return }

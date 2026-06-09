@@ -70,6 +70,7 @@ public struct PhotoAssetRepository: Sendable {
     }
 
     private func upsert(_ asset: PhotoAsset, now: String, database: Database) throws {
+        let sourceTypeRaw = asset.isSystemPhotos ? "photos_library" : "local_directory"
         let values: [(any DatabaseValueConvertible)?] = [
             asset.id,
             asset.localIdentifier,
@@ -87,8 +88,14 @@ public struct PhotoAssetRepository: Sendable {
             DateCoding.string(from: asset.trashedAt),
             asset.iCloudState.rawValue,
             asset.isLocallyAvailable.map { $0 ? 1 : 0 },
-            "photos_library",
+            sourceTypeRaw,
             asset.isScreenshot ? DeviceCategory.screenshot.rawValue : DeviceCategory.unknown.rawValue,
+            asset.sourceID,
+            asset.sourceAssetKey,
+            nil, // file_bookmark：源根目录安全作用域书签已覆盖子文件访问，暂不存每文件书签
+            asset.relativePath,
+            asset.contentHash,
+            asset.fileSize,
             now,
             now
         ]
@@ -100,9 +107,11 @@ public struct PhotoAssetRepository: Sendable {
                   id, local_identifier, filename, media_type, media_subtypes_raw,
                   creation_date, modification_date, width, height, duration,
                   is_favorite, is_hidden, in_trash, trashed_at, icloud_state,
-                  is_locally_available, source_type, device_category, imported_at, updated_at
+                  is_locally_available, source_type, device_category,
+                  source_id, source_asset_key, file_bookmark, relative_path, content_hash, file_size,
+                  imported_at, updated_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(id) do update set
                   local_identifier = excluded.local_identifier,
                   filename = excluded.filename,
@@ -119,6 +128,12 @@ public struct PhotoAssetRepository: Sendable {
                   is_locally_available = excluded.is_locally_available,
                   source_type = excluded.source_type,
                   device_category = excluded.device_category,
+                  source_id = excluded.source_id,
+                  source_asset_key = excluded.source_asset_key,
+                  file_bookmark = excluded.file_bookmark,
+                  relative_path = excluded.relative_path,
+                  content_hash = excluded.content_hash,
+                  file_size = excluded.file_size,
                   updated_at = excluded.updated_at;
                 """,
             arguments: StatementArguments(values)

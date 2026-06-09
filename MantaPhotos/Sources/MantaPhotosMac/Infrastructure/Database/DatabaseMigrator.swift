@@ -48,8 +48,51 @@ public struct DatabaseMigrator {
         Migration(version: 1, name: "p0_core", sql: p0CoreSQL),
         Migration(version: 2, name: "p1_search_and_analysis", sql: p1SearchAndAnalysisSQL),
         Migration(version: 3, name: "p0_p1_schema_expansion", sql: p0P1SchemaExpansionSQL),
-        Migration(version: 4, name: "drop_thumbnail_cache_index", sql: dropThumbnailCacheIndexSQL)
+        Migration(version: 4, name: "drop_thumbnail_cache_index", sql: dropThumbnailCacheIndexSQL),
+        Migration(version: 5, name: "multi_photo_source", sql: multiPhotoSourceSQL)
     ]
+
+    // 多照片源：新增 photo_sources 表，photo_assets 增补 source 定位字段，并把存量行回填到系统源。
+    // 注意：不重写 photo_assets.id（保留与 photo_scores / analysis_tasks 等外键关系），
+    // 系统源 id 仍 = localIdentifier；本地源 id 由导入器生成（local_identifier 同步存同值以满足 not null unique）。
+    private static let multiPhotoSourceSQL =
+        """
+        create table if not exists photo_sources (
+          id text primary key,
+          kind text not null,
+          display_name text not null,
+          root_bookmark blob,
+          root_path text,
+          is_enabled integer not null default 1,
+          last_synced_at text,
+          created_at text not null,
+          updated_at text not null
+        );
+
+        insert or ignore into photo_sources(id, kind, display_name, is_enabled, created_at, updated_at)
+        values (
+          'system_photos', 'system_photos', '系统图库', 1,
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+
+        alter table photo_assets add column source_id text;
+        alter table photo_assets add column source_asset_key text;
+        alter table photo_assets add column file_bookmark blob;
+        alter table photo_assets add column relative_path text;
+        alter table photo_assets add column content_hash text;
+        alter table photo_assets add column file_size integer;
+
+        update photo_assets
+        set source_id = 'system_photos',
+            source_asset_key = local_identifier
+        where source_id is null;
+
+        create index if not exists idx_photo_assets_source on photo_assets(source_id);
+        create unique index if not exists idx_photo_assets_source_key
+          on photo_assets(source_id, source_asset_key);
+        create index if not exists idx_photo_assets_content_hash on photo_assets(content_hash);
+        """
 
     // PHCachingImageManager 已提供完整的内存/磁盘缩略图缓存与可见区预热，
     // 额外维护 thumbnail_cache_index 表只增加写库 IO 而无增量价值，故移除。

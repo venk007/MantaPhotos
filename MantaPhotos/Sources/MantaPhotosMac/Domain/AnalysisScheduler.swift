@@ -192,10 +192,22 @@ actor AnalysisScheduler {
             if task.isScreenshot {
                 result = .screenshot()
             } else {
-                let data = try await adapter.requestImageData(
-                    localIdentifier: task.localIdentifier,
-                    allowNetworkAccess: false
-                )
+                let data: Data
+                if task.isSystemPhotos {
+                    data = try await adapter.requestImageData(
+                        localIdentifier: task.localIdentifier,
+                        allowNetworkAccess: false
+                    )
+                } else {
+                    // 本地 / 外部源：从源根目录（安全作用域已开启）解析文件 URL 取像素。
+                    guard let url = PhotoSourceRegistry.shared.fileURL(
+                        forSourceID: task.sourceID,
+                        relativePath: task.relativePath ?? task.sourceAssetKey
+                    ) else {
+                        throw PhotoSourceError.fileNotFound(task.sourceAssetKey)
+                    }
+                    data = try LocalMediaProvider().imageData(fileURL: url)
+                }
                 try Task.checkCancellation()
                 result = try await provider.scoreImage(data: data, isScreenshot: false)
             }

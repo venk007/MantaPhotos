@@ -36,6 +36,8 @@ final class AppState {
             library.attach(databaseQueue: queue)
             analysis.attach(databaseQueue: queue, library: library)
             try loadSettings()
+            // 加载并注册所有照片源（系统 + 本地），解析本地源安全作用域书签。
+            library.loadAndRegisterSources()
             bootstrapStatus = .ready
             await library.refreshPhotos()
             library.startInitialImportIfPossible()

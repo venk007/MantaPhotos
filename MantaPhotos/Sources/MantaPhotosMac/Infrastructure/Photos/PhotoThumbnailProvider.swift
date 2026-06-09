@@ -2,6 +2,9 @@ import AppKit
 import Foundation
 import Photos
 
+/// 缩略图门面：按资产所属源路由。
+/// 系统源走 `PHCachingImageManager`（含预热缓存）；本地 / 外部源走 `LocalThumbnailProvider`（ImageIO）。
+/// 对外统一返回 `ThumbnailRequestToken`，调用方无需关心底层是 PhotoKit 还是文件。
 final class PhotoThumbnailProvider: @unchecked Sendable {
     static let shared = PhotoThumbnailProvider()
 
@@ -11,10 +14,36 @@ final class PhotoThumbnailProvider: @unchecked Sendable {
 
     @discardableResult
     func requestThumbnail(
+        for asset: PhotoAsset,
+        targetSize: CGSize,
+        completion: @MainActor @escaping (NSImage?) -> Void
+    ) -> ThumbnailRequestToken? {
+        switch PhotoSourceRegistry.shared.kind(forSourceID: asset.sourceID) {
+        case .systemPhotos:
+            return requestSystemThumbnail(
+                localIdentifier: asset.localIdentifier,
+                targetSize: targetSize,
+                completion: completion
+            )
+        case .localDirectory, .externalLibrary:
+            guard let url = PhotoSourceRegistry.shared.fileURL(for: asset) else {
+                Task { @MainActor in completion(nil) }
+                return nil
+            }
+            return LocalThumbnailProvider.shared.requestThumbnail(
+                fileURL: url,
+                cacheKey: asset.id,
+                maxPixel: max(targetSize.width, targetSize.height),
+                completion: completion
+            )
+        }
+    }
+
+    private func requestSystemThumbnail(
         localIdentifier: String,
         targetSize: CGSize,
         completion: @MainActor @escaping (NSImage?) -> Void
-    ) -> PHImageRequestID? {
+    ) -> ThumbnailRequestToken? {
         let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
         guard let asset = result.firstObject else {
             Task { @MainActor in completion(nil) }
@@ -27,53 +56,59 @@ final class PhotoThumbnailProvider: @unchecked Sendable {
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false
 
-        return imageManager.requestImage(
+        let requestID = imageManager.requestImage(
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: options
         ) { image, _ in
-            Task { @MainActor in
-                completion(image)
-            }
+            Task { @MainActor in completion(image) }
+        }
+
+        return ThumbnailRequestToken { [weak self] in
+            self?.imageManager.cancelImageRequest(requestID)
         }
     }
 
-    func cancel(_ requestID: PHImageRequestID?) {
-        guard let requestID else { return }
-        imageManager.cancelImageRequest(requestID)
+    func cancel(_ token: ThumbnailRequestToken?) {
+        token?.cancel()
     }
 
-    func startCaching(localIdentifiers: [String], targetSize: CGSize) {
-        let assets = phAssets(localIdentifiers: localIdentifiers)
-        guard !assets.isEmpty else { return }
+    func startCaching(assets: [PhotoAsset], targetSize: CGSize) {
+        let phAssets = systemPHAssets(from: assets)
+        guard !phAssets.isEmpty else { return }
         imageManager.startCachingImages(
-            for: assets,
+            for: phAssets,
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: nil
         )
+        // 本地源缩略图由 LocalThumbnailProvider 惰性缓存，无需在此预热。
     }
 
-    func stopCaching(localIdentifiers: [String], targetSize: CGSize) {
-        let assets = phAssets(localIdentifiers: localIdentifiers)
-        guard !assets.isEmpty else { return }
+    func stopCaching(assets: [PhotoAsset], targetSize: CGSize) {
+        let phAssets = systemPHAssets(from: assets)
+        guard !phAssets.isEmpty else { return }
         imageManager.stopCachingImages(
-            for: assets,
+            for: phAssets,
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: nil
         )
     }
 
-    private func phAssets(localIdentifiers: [String]) -> [PHAsset] {
+    private func systemPHAssets(from assets: [PhotoAsset]) -> [PHAsset] {
+        let localIdentifiers = assets
+            .filter { $0.sourceID == PhotoSourceDescriptor.systemPhotosID }
+            .map(\.localIdentifier)
         guard !localIdentifiers.isEmpty else { return [] }
+
         let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
-        var assets: [PHAsset] = []
-        assets.reserveCapacity(result.count)
+        var phAssets: [PHAsset] = []
+        phAssets.reserveCapacity(result.count)
         result.enumerateObjects { asset, _, _ in
-            assets.append(asset)
+            phAssets.append(asset)
         }
-        return assets
+        return phAssets
     }
 }

@@ -22,7 +22,11 @@ final class PhotoLibraryViewModel {
     var selectedPhotoForViewer: PhotoSearchResult?
     var isViewerPresented = false
 
+    /// 当前所有照片源（系统图库 + 本地目录等）。
+    private(set) var sources: [PhotoSourceDescriptor] = []
+
     @ObservationIgnored private var databaseQueue: DatabaseQueue?
+    @ObservationIgnored private var sourceRepository: PhotoSourceRepository?
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var didStartInitialImport = false
     @ObservationIgnored private let photoPageSize = 3_000
@@ -32,6 +36,105 @@ final class PhotoLibraryViewModel {
     /// 由组合根（`AppState`）在 bootstrap 完成后注入数据库连接。
     func attach(databaseQueue: DatabaseQueue) {
         self.databaseQueue = databaseQueue
+        self.sourceRepository = PhotoSourceRepository(databaseQueue: databaseQueue)
+    }
+
+    // MARK: - 照片源管理
+
+    /// 读取所有源，解析本地源书签并注册到 `PhotoSourceRegistry`（开启安全作用域）。
+    /// 在 bootstrap 时调用一次。
+    func loadAndRegisterSources() {
+        PhotoSourceRegistry.shared.register(descriptor: .systemPhotos, resolvedRoot: nil)
+        guard let sourceRepository else { return }
+        do {
+            let descriptors = try sourceRepository.allSources()
+            sources = descriptors
+            for descriptor in descriptors where descriptor.kind.isFileBased {
+                guard descriptor.isEnabled, let bookmark = descriptor.rootBookmark else { continue }
+                if let url = Self.resolveBookmark(bookmark) {
+                    _ = url.startAccessingSecurityScopedResource()
+                    PhotoSourceRegistry.shared.register(descriptor: descriptor, resolvedRoot: url)
+                }
+            }
+        } catch {
+            reportError(error)
+        }
+    }
+
+    /// 添加一个本地目录源：保存安全作用域书签、注册、后台扫描导入。
+    func addLocalDirectory(url: URL) {
+        guard let sourceRepository, let databaseQueue else { return }
+        do {
+            let bookmark = try url.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+            let descriptor = PhotoSourceDescriptor(
+                id: "local:\(UUID().uuidString)",
+                kind: .localDirectory,
+                displayName: url.lastPathComponent,
+                rootBookmark: bookmark,
+                rootPath: url.path,
+                isEnabled: true
+            )
+            try sourceRepository.upsert(descriptor)
+            _ = url.startAccessingSecurityScopedResource()
+            PhotoSourceRegistry.shared.register(descriptor: descriptor, resolvedRoot: url)
+            sources = try sourceRepository.allSources()
+            runLocalImport(sourceID: descriptor.id, rootURL: url, databaseQueue: databaseQueue)
+        } catch {
+            reportError(error)
+        }
+    }
+
+    /// 重新扫描一个本地源（手动同步；FSEvents 实时监听为后续增强）。
+    func rescanSource(id: String) {
+        guard let databaseQueue,
+              PhotoSourceRegistry.shared.kind(forSourceID: id).isFileBased,
+              let url = PhotoSourceRegistry.shared.rootURL(forSourceID: id) else { return }
+        runLocalImport(sourceID: id, rootURL: url, databaseQueue: databaseQueue)
+    }
+
+    /// 移除一个本地 / 外部源（及其全部资产）。系统源不可移除。
+    func removeSource(id: String) {
+        guard id != PhotoSourceDescriptor.systemPhotosID, let sourceRepository else { return }
+        do {
+            PhotoSourceRegistry.shared.unregister(sourceID: id)
+            try sourceRepository.deleteSource(sourceID: id)
+            sources = try sourceRepository.allSources()
+            Task { await refreshPhotos() }
+        } catch {
+            reportError(error)
+        }
+    }
+
+    private func runLocalImport(sourceID: String, rootURL: URL, databaseQueue: DatabaseQueue) {
+        let importer = LocalDirectoryImporter(
+            repository: PhotoAssetRepository(databaseQueue: databaseQueue),
+            sourceID: sourceID,
+            rootURL: rootURL
+        )
+        Task { [weak self] in
+            do {
+                _ = try await Task.detached(priority: .utility) {
+                    try await importer.importAll()
+                }.value
+                await self?.refreshPhotos()
+            } catch {
+                self?.reportError(error)
+            }
+        }
+    }
+
+    private static func resolveBookmark(_ data: Data) -> URL? {
+        var isStale = false
+        return try? URL(
+            resolvingBookmarkData: data,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
     }
 
     func reportError(_ error: Error) {
@@ -195,18 +298,23 @@ final class PhotoLibraryViewModel {
         let currentIndex = photoResults.firstIndex(where: { $0.id == selectedPhotoForViewer.id }) ?? 0
         let nextValue = !selectedPhotoForViewer.asset.isFavorite
 
+        let asset = selectedPhotoForViewer.asset
+        let photoID = selectedPhotoForViewer.id
         Task { [databaseQueue] in
             do {
-                try await PhotoLibraryAdapter().setFavorite(
-                    localIdentifier: selectedPhotoForViewer.asset.localIdentifier,
-                    isFavorite: nextValue
-                )
+                // 仅系统图库写回系统收藏；本地 / 外部源仅更新 App 内收藏状态。
+                if asset.isSystemPhotos {
+                    try await PhotoLibraryAdapter().setFavorite(
+                        localIdentifier: asset.localIdentifier,
+                        isFavorite: nextValue
+                    )
+                }
                 try PhotoAssetRepository(databaseQueue: databaseQueue).updateFavorite(
-                    photoID: selectedPhotoForViewer.id,
+                    photoID: photoID,
                     isFavorite: nextValue
                 )
                 await refreshPhotos()
-                reconcileViewerSelection(previousID: selectedPhotoForViewer.id, previousIndex: currentIndex)
+                reconcileViewerSelection(previousID: photoID, previousIndex: currentIndex)
             } catch {
                 lastErrorMessage = error.localizedDescription
             }
@@ -238,12 +346,19 @@ final class PhotoLibraryViewModel {
         guard let selectedPhotoForViewer, let databaseQueue else { return }
         let currentIndex = photoResults.firstIndex(where: { $0.id == selectedPhotoForViewer.id }) ?? 0
 
+        let asset = selectedPhotoForViewer.asset
+        let photoID = selectedPhotoForViewer.id
         Task { [databaseQueue] in
             do {
-                try await PhotoLibraryAdapter().deleteAsset(localIdentifier: selectedPhotoForViewer.asset.localIdentifier)
-                try PhotoAssetRepository(databaseQueue: databaseQueue).markSystemDeleted(photoID: selectedPhotoForViewer.id)
+                if asset.isSystemPhotos {
+                    try await PhotoLibraryAdapter().deleteAsset(localIdentifier: asset.localIdentifier)
+                } else if let url = PhotoSourceRegistry.shared.fileURL(for: asset) {
+                    // 本地 / 外部源：移入「废纸篓」（可恢复），不做硬删除。
+                    try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                }
+                try PhotoAssetRepository(databaseQueue: databaseQueue).markSystemDeleted(photoID: photoID)
                 await refreshPhotos()
-                reconcileViewerSelection(previousID: selectedPhotoForViewer.id, previousIndex: currentIndex)
+                reconcileViewerSelection(previousID: photoID, previousIndex: currentIndex)
             } catch {
                 lastErrorMessage = error.localizedDescription
             }

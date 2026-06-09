@@ -8,6 +8,12 @@ public struct VisionAnalysisTaskRecord: Identifiable, Equatable, Sendable {
     public var photoID: String
     public var localIdentifier: String
     public var isScreenshot: Bool
+    // 多源定位：系统源用 localIdentifier，本地 / 外部源用 sourceID + relativePath。
+    public var sourceID: String
+    public var sourceAssetKey: String
+    public var relativePath: String?
+
+    public var isSystemPhotos: Bool { sourceID == PhotoAsset.systemPhotosSourceID }
 }
 
 public struct AnalysisRepository: Sendable {
@@ -152,7 +158,10 @@ public struct AnalysisRepository: Sendable {
                       analysis_tasks.analysis_run_id,
                       analysis_tasks.photo_id,
                       photo_assets.local_identifier,
-                      photo_assets.media_subtypes_raw
+                      photo_assets.media_subtypes_raw,
+                      photo_assets.source_id,
+                      photo_assets.source_asset_key,
+                      photo_assets.relative_path
                     from analysis_tasks
                     join photo_assets on photo_assets.id = analysis_tasks.photo_id
                     where analysis_tasks.analysis_run_id = ?
@@ -166,12 +175,17 @@ public struct AnalysisRepository: Sendable {
 
             return rows.map { row in
                 let raw = UInt(row["media_subtypes_raw"] as Int64)
+                let sourceID = (row["source_id"] as String?) ?? PhotoAsset.systemPhotosSourceID
+                let sourceAssetKey = (row["source_asset_key"] as String?) ?? (row["local_identifier"] as String)
                 return VisionAnalysisTaskRecord(
                     id: row["id"],
                     analysisRunID: row["analysis_run_id"],
                     photoID: row["photo_id"],
                     localIdentifier: row["local_identifier"],
-                    isScreenshot: (raw & PHAssetMediaSubtype.photoScreenshot.rawValue) != 0
+                    isScreenshot: (raw & PHAssetMediaSubtype.photoScreenshot.rawValue) != 0,
+                    sourceID: sourceID,
+                    sourceAssetKey: sourceAssetKey,
+                    relativePath: row["relative_path"]
                 )
             }
         }

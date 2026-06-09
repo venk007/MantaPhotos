@@ -137,6 +137,14 @@ public struct SearchRepository: Sendable {
         let mediaSubtypesRaw = UInt(row["media_subtypes_raw"] as Int64)
         let isLocallyAvailableInt: Int? = row["is_locally_available"]
 
+        // 多源字段（migration 5 后存在；旧库读出可能为空，回落到系统源语义）。
+        let sourceID: String = (row["source_id"] as String?) ?? PhotoAsset.systemPhotosSourceID
+        let sourceAssetKey: String = (row["source_asset_key"] as String?) ?? (row["local_identifier"] as String)
+        let relativePath: String? = row["relative_path"]
+        let contentHash: String? = row["content_hash"]
+        let fileSize: Int64? = row["file_size"]
+        let deviceCategory: String? = row["device_category"]
+
         return PhotoAsset(
             id: row["id"],
             localIdentifier: row["local_identifier"],
@@ -153,7 +161,13 @@ public struct SearchRepository: Sendable {
             inTrash: (row["in_trash"] as Int) == 1,
             trashedAt: DateCoding.date(from: row["trashed_at"]),
             iCloudState: ICloudState(rawValue: row["icloud_state"] as String) ?? .unknown,
-            isLocallyAvailable: isLocallyAvailableInt.map { $0 == 1 }
+            isLocallyAvailable: isLocallyAvailableInt.map { $0 == 1 },
+            sourceID: sourceID,
+            sourceAssetKey: sourceAssetKey,
+            relativePath: relativePath,
+            contentHash: contentHash,
+            fileSize: fileSize,
+            isScreenshotFlag: deviceCategory == DeviceCategory.screenshot.rawValue
         )
     }
 
