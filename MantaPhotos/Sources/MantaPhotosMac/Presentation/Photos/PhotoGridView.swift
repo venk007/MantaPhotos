@@ -56,6 +56,9 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
     private var scrollRestoreWorkItem: DispatchWorkItem?
     private var magnificationAccumulator: CGFloat = 0
     private var didRequestLoadMoreAtCount = 0
+    // 预热节流：记录上次重算预热时的滚动位置，并合并同一 runloop 内的多次滚动通知。
+    private var lastPreheatOffsetY: CGFloat = .greatestFiniteMagnitude
+    private var pendingPreheat = false
     var onSelect: ((PhotoSearchResult) -> Void)?
     var onSidebarExpandedChange: ((Bool) -> Void)?
     var onLoadMore: (() -> Void)?
@@ -73,7 +76,8 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
 
         flowLayout.minimumInteritemSpacing = 16
         flowLayout.minimumLineSpacing = 16
-        flowLayout.sectionInset = NSEdgeInsets(top: 16, left: 20, bottom: 24, right: 20)
+        // 底部预留出悬浮液态玻璃导航坞 + 状态条的空间，避免最后一行被遮挡。
+        flowLayout.sectionInset = NSEdgeInsets(top: 16, left: 20, bottom: 96, right: 20)
 
         collectionView.collectionViewLayout = flowLayout
         collectionView.delegate = self
@@ -231,9 +235,24 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
 
     @objc
     private func scrollViewBoundsDidChange() {
-        updateThumbnailPreheating()
         updateSidebarForScroll()
         updateLoadMoreTrigger()
+        schedulePreheatUpdate()
+    }
+
+    /// 滚动时的预热调度：滚动距离不足半行不重算，且把同一 runloop 内的多次通知合并为一次，
+    /// 避免每个滚动帧都做一次布局属性查询造成卡顿。
+    private func schedulePreheatUpdate() {
+        let currentY = scrollView.contentView.bounds.origin.y
+        let threshold = max(40, flowLayout.itemSize.height * 0.5)
+        guard abs(currentY - lastPreheatOffsetY) >= threshold else { return }
+        guard !pendingPreheat else { return }
+        pendingPreheat = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pendingPreheat = false
+            self.updateThumbnailPreheating()
+        }
     }
 
     @objc
@@ -255,7 +274,8 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
             return
         }
 
-        collectionView.layoutSubtreeIfNeeded()
+        // 记录基线，供滚动节流判断；不再每帧强制 layoutSubtreeIfNeeded（flow 布局属性按需可得）。
+        lastPreheatOffsetY = scrollView.contentView.bounds.origin.y
         let visibleRect = scrollView.contentView.bounds
         let preheatRect = visibleRect.insetBy(dx: 0, dy: -visibleRect.height * 0.75)
         let localIdentifiers = localIdentifiersForItems(in: preheatRect)
@@ -364,7 +384,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
 final class PhotoGridItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("PhotoGridItem")
 
-    private let imageViewControl = NSImageView()
+    private let thumbnailView = NSView()
     private let scoreLabel = NSTextField(labelWithString: "")
     private let mediaBadge = NSTextField(labelWithString: "")
     private let selectionRing = CALayer()
@@ -377,9 +397,12 @@ final class PhotoGridItem: NSCollectionViewItem {
         view.layer?.masksToBounds = true
         view.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.18).cgColor
 
-        imageViewControl.imageScaling = .scaleAxesIndependently
-        imageViewControl.translatesAutoresizingMaskIntoConstraints = false
-        imageViewControl.wantsLayer = true
+        thumbnailView.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailView.wantsLayer = true
+        // 用图层 resizeAspectFill 等比填充并裁剪（方格内居中裁切），
+        // 取代 NSImageView 的 scaleAxesIndependently 双轴拉伸，避免非方形照片畸变。
+        thumbnailView.layer?.contentsGravity = .resizeAspectFill
+        thumbnailView.layer?.masksToBounds = true
 
         scoreLabel.translatesAutoresizingMaskIntoConstraints = false
         scoreLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
@@ -402,16 +425,16 @@ final class PhotoGridItem: NSCollectionViewItem {
         selectionRing.borderColor = NSColor.controlAccentColor.cgColor
         selectionRing.cornerRadius = 12
 
-        view.addSubview(imageViewControl)
+        view.addSubview(thumbnailView)
         view.addSubview(scoreLabel)
         view.addSubview(mediaBadge)
         view.layer?.addSublayer(selectionRing)
 
         NSLayoutConstraint.activate([
-            imageViewControl.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            imageViewControl.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            imageViewControl.topAnchor.constraint(equalTo: view.topAnchor),
-            imageViewControl.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            thumbnailView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            thumbnailView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            thumbnailView.topAnchor.constraint(equalTo: view.topAnchor),
+            thumbnailView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             scoreLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             scoreLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
@@ -434,7 +457,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         super.prepareForReuse()
         PhotoThumbnailProvider.shared.cancel(requestID)
         requestID = nil
-        imageViewControl.image = nil
+        thumbnailView.layer?.contents = nil
         representedObject = nil
     }
 
@@ -445,7 +468,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         targetSize: CGSize
     ) {
         representedObject = result.id
-        imageViewControl.image = nil
+        thumbnailView.layer?.contents = nil
         selectionRing.borderWidth = selected ? 3 : 0
 
         configureScore(result: result, badgeMetric: badgeMetric)
@@ -456,8 +479,18 @@ final class PhotoGridItem: NSCollectionViewItem {
             targetSize: targetSize
         ) { [weak self] image in
             guard let self, self.representedObject as? String == result.id else { return }
-            self.imageViewControl.image = image
+            self.setThumbnail(image)
         }
+    }
+
+    /// 把缩略图作为图层内容（CGImage）写入，配合 `resizeAspectFill` 等比裁剪填充，不拉伸。
+    private func setThumbnail(_ image: NSImage?) {
+        guard let image else {
+            thumbnailView.layer?.contents = nil
+            return
+        }
+        var proposedRect = CGRect(origin: .zero, size: image.size)
+        thumbnailView.layer?.contents = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
     }
 
     private func configureScore(result: PhotoSearchResult, badgeMetric: BadgeMetric) {

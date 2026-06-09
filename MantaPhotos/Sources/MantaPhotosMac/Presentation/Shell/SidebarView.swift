@@ -194,13 +194,7 @@ struct SidebarView: View {
                 .padding(.vertical, 5)
                 .foregroundStyle(active ? .white : .secondary)
                 .background(
-                    active
-                        ? AnyShapeStyle(LinearGradient(
-                            colors: [Color(red: 0.37, green: 0.36, blue: 0.90), Color(red: 0.75, green: 0.35, blue: 0.95)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
-                        : AnyShapeStyle(.quaternary),
+                    active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary),
                     in: Capsule()
                 )
         }
@@ -213,7 +207,7 @@ struct SidebarView: View {
                 .font(.caption.weight(.bold))
                 .frame(width: 24, height: 20)
                 .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(activeGradient) : AnyShapeStyle(.quaternary), in: RoundedRectangle(cornerRadius: 5))
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: RoundedRectangle(cornerRadius: DesignSystem.Radius.control))
         }
         .buttonStyle(.plain)
     }
@@ -253,14 +247,6 @@ struct SidebarView: View {
             .padding(.vertical, 5)
             .foregroundStyle(.tertiary)
             .background(.quaternary, in: Capsule())
-    }
-
-    private var activeGradient: LinearGradient {
-        LinearGradient(
-            colors: [Color(red: 0.37, green: 0.36, blue: 0.90), Color(red: 0.75, green: 0.35, blue: 0.95)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
     }
 
     private func sidebarItem(_ title: String, icon: String, active: Bool, action: @escaping () -> Void) -> some View {

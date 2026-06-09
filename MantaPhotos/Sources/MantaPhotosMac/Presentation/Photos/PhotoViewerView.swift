@@ -15,9 +15,15 @@ struct PhotoViewerView: View {
     @State private var showsDeleteConfirmation = false
     @State private var isPlaying = false
 
+    // 缩放 / 平移手势状态（仅作用于静态图）。
+    @State private var zoomScale: CGFloat = 1
+    @State private var panOffset: CGSize = .zero
+    @GestureState private var pinchScale: CGFloat = 1
+    @GestureState private var dragTranslation: CGSize = .zero
+
     var body: some View {
         ZStack {
-            Color.black.opacity(0.94)
+            DesignSystem.Glass.viewerBackdrop
                 .ignoresSafeArea()
 
             HStack(spacing: 0) {
@@ -48,6 +54,7 @@ struct PhotoViewerView: View {
             requestMedia()
         }
         .onChange(of: result.id) {
+            resetZoom()
             requestMedia()
         }
         .onDisappear {
@@ -89,23 +96,87 @@ struct PhotoViewerView: View {
                 LivePhotoPlayerView(livePhoto: livePhoto, isPlaying: $isPlaying)
                     .padding(36)
             } else if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(36)
+                zoomableImage(image)
             } else {
                 loadingView
             }
         case .image, .unknown:
             if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(36)
+                zoomableImage(image)
             } else {
                 loadingView
             }
         }
+    }
+
+    /// 可缩放 / 平移 / 双击放大 / 左右滑动切换的静态图。
+    private func zoomableImage(_ image: NSImage) -> some View {
+        let effectiveScale = max(1, zoomScale * pinchScale)
+        let offset = effectiveScale > 1
+            ? CGSize(
+                width: panOffset.width + dragTranslation.width,
+                height: panOffset.height + dragTranslation.height
+            )
+            : .zero
+
+        return Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(effectiveScale)
+            .offset(offset)
+            .gesture(magnificationGesture.simultaneously(with: dragGesture))
+            .onTapGesture(count: 2) { toggleZoom() }
+            .padding(36)
+            .clipped()
+            .animation(.snappy(duration: 0.18), value: zoomScale)
+    }
+
+    private var magnificationGesture: some Gesture {
+        MagnificationGesture()
+            .updating($pinchScale) { value, state, _ in
+                state = value
+            }
+            .onEnded { value in
+                zoomScale = min(6, max(1, zoomScale * value))
+                if zoomScale <= 1 {
+                    panOffset = .zero
+                }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .updating($dragTranslation) { value, state, _ in
+                if zoomScale > 1 {
+                    state = value.translation
+                }
+            }
+            .onEnded { value in
+                if zoomScale > 1 {
+                    panOffset.width += value.translation.width
+                    panOffset.height += value.translation.height
+                } else if value.translation.width < -60 {
+                    appState.library.selectAdjacentPhoto(delta: 1)
+                } else if value.translation.width > 60 {
+                    appState.library.selectAdjacentPhoto(delta: -1)
+                }
+            }
+    }
+
+    private func toggleZoom() {
+        withAnimation(.snappy(duration: 0.2)) {
+            if zoomScale > 1 {
+                zoomScale = 1
+                panOffset = .zero
+            } else {
+                zoomScale = 2.5
+            }
+        }
+    }
+
+    private func resetZoom() {
+        zoomScale = 1
+        panOffset = .zero
     }
 
     private var loadingView: some View {
@@ -116,28 +187,44 @@ struct PhotoViewerView: View {
     private var viewerChrome: some View {
         VStack {
             HStack {
-                Button {
-                    appState.library.closeViewer()
-                } label: {
-                    Image(systemName: "xmark")
+                HStack(spacing: 12) {
+                    Button {
+                        appState.library.closeViewer()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .keyboardShortcut(.escape)
                 }
-                .keyboardShortcut(.escape)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+                }
 
                 Spacer()
 
-                Button {
-                    appState.library.selectAdjacentPhoto(delta: -1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .keyboardShortcut(.leftArrow, modifiers: [])
+                HStack(spacing: 16) {
+                    Button {
+                        appState.library.selectAdjacentPhoto(delta: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
 
-                Button {
-                    appState.library.selectAdjacentPhoto(delta: 1)
-                } label: {
-                    Image(systemName: "chevron.right")
+                    Button {
+                        appState.library.selectAdjacentPhoto(delta: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [])
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+                }
             }
             .buttonStyle(.borderless)
             .font(.title3)
@@ -176,27 +263,33 @@ struct PhotoViewerView: View {
                 } label: {
                     Label(result.asset.isFavorite ? "Favorited" : "Favorite", systemImage: result.asset.isFavorite ? "heart.fill" : "heart")
                 }
-                .keyboardShortcut("f", modifiers: [])
+                .keyboardShortcut(".", modifiers: [])
 
                 Button {
                     showsDeleteConfirmation = true
                 } label: {
                     Label("Delete", systemImage: "delete.left")
                 }
-                .keyboardShortcut("d", modifiers: [.command])
+                .keyboardShortcut(.delete, modifiers: [.command])
 
                 Button {
                     showsInfo.toggle()
                 } label: {
                     Label("Info", systemImage: "info.circle")
                 }
-                .keyboardShortcut("i", modifiers: [])
+                .keyboardShortcut("i", modifiers: [.command])
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
+            .overlay {
+                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
+                    .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
             .padding(.horizontal, 22)
-            .padding(.vertical, 14)
-            .background(.ultraThinMaterial)
+            .padding(.bottom, 22)
         }
     }
 

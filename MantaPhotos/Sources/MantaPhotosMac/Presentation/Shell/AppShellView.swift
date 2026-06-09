@@ -19,6 +19,15 @@ struct AppShellView: View {
                 BottomBarView()
             }
 
+            if !appState.navigation.isFindOverlayPresented {
+                VStack(spacing: 0) {
+                    Spacer()
+                    LiquidGlassDock()
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(8)
+            }
+
             if appState.navigation.isFindOverlayPresented {
                 FindOverlayView()
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -146,8 +155,6 @@ struct TopBarView: View {
             .layoutPriority(1)
 
             Spacer(minLength: 0)
-            searchEntry
-            Spacer(minLength: 0)
             trailingControls
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
@@ -178,32 +185,6 @@ struct TopBarView: View {
                 topTab(route)
             }
         }
-    }
-
-    private var searchEntry: some View {
-        Button {
-            appState.navigation.isFindOverlayPresented.toggle()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                Text(appState.localized("Search photos"))
-                Text("⌘K")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5))
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .frame(width: 330, height: 34)
-            .background(.regularMaterial, in: Capsule())
-            .overlay {
-                Capsule()
-                    .stroke(.white.opacity(0.18), lineWidth: 0.5)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private var trailingControls: some View {
@@ -253,10 +234,10 @@ struct SidebarOverlayView: View {
         HStack(spacing: 0) {
             SidebarView()
                 .frame(width: DesignSystem.Metrics.sidebarWidth)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(.white.opacity(0.18), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
+                        .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
                 }
                 .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
                 .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
@@ -280,6 +261,76 @@ struct SidebarOverlayView: View {
         .padding(.leading, 16)
         .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
         .zIndex(5)
+    }
+}
+
+/// iOS / visionOS 风格的底部悬浮液态玻璃导航坞。
+///
+/// 居中胶囊承载四个分区的快速跳转，active 分区展开标题；
+/// 右侧是一枚独立的圆形 🔍 玻璃按钮，打开 Find 浮层（与 ⌘K 等价）。
+/// 悬浮在内容之上，照片网格已为其预留底部留白。
+struct LiquidGlassDock: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 4) {
+                ForEach(AppRoute.allCases) { route in
+                    dockTab(route)
+                }
+            }
+            .padding(6)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
+
+            Button {
+                appState.navigation.isFindOverlayPresented = true
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 46, height: 46)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay {
+                        Circle().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+                    }
+            }
+            .buttonStyle(.plain)
+            .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
+            .help(appState.localized("Search photos"))
+        }
+        .padding(.bottom, DesignSystem.Metrics.bottomBarHeight + DesignSystem.Spacing.md)
+        .animation(.snappy(duration: 0.2), value: appState.navigation.route)
+    }
+
+    private func dockTab(_ route: AppRoute) -> some View {
+        let active = appState.navigation.route == route
+        return Button {
+            appState.navigation.route = route
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: route.iconName)
+                if active {
+                    Text(appState.localized(route.localizationKey))
+                        .lineLimit(1)
+                }
+            }
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, active ? 15 : 12)
+            .padding(.vertical, 9)
+            .foregroundStyle(active ? .white : .secondary)
+            .background {
+                if active {
+                    Capsule().fill(DesignSystem.Glass.activeTint)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(appState.localized(route.localizationKey))
     }
 }
 

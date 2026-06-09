@@ -8,7 +8,7 @@ struct FindOverlayView: View {
     var body: some View {
         @Bindable var library = appState.library
         ZStack {
-            Color.black.opacity(appState.navigation.themeMode == .light ? 0.16 : 0.28)
+            (appState.navigation.themeMode == .light ? DesignSystem.Glass.scrimLight : DesignSystem.Glass.scrimDark)
                 .ignoresSafeArea()
                 .onTapGesture {
                     appState.navigation.isFindOverlayPresented = false
@@ -34,12 +34,12 @@ struct FindOverlayView: View {
                 footer
             }
             .frame(width: 760, height: 660)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
             .overlay {
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(.white.opacity(0.20), lineWidth: 0.6)
+                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
+                    .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
             }
-            .shadow(color: .black.opacity(0.28), radius: 34, x: 0, y: 18)
+            .shadow(color: .black.opacity(0.24), radius: 30, x: 0, y: 16)
         }
         .onAppear {
             sidebarWasExpanded = appState.navigation.isSidebarExpanded
@@ -79,7 +79,7 @@ struct FindOverlayView: View {
             }
             .padding(.horizontal, 14)
             .frame(height: 42)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.card))
 
             Button {
                 appState.library.searchFilter = SearchFilterState()
@@ -111,7 +111,7 @@ struct FindOverlayView: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 10)
-        .background(.black.opacity(appState.navigation.themeMode == .light ? 0.03 : 0.10))
+        .background(.quaternary)
     }
 
     private var mediaSection: some View {
@@ -294,7 +294,7 @@ struct FindOverlayView: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 12)
-        .background(.black.opacity(appState.navigation.themeMode == .light ? 0.03 : 0.10))
+        .background(.quaternary)
     }
 
     private func findSection<Content: View>(
@@ -331,7 +331,7 @@ struct FindOverlayView: View {
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
                 .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(activeGradient) : AnyShapeStyle(.quaternary), in: Capsule())
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -343,7 +343,7 @@ struct FindOverlayView: View {
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
                 .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(activeGradient) : AnyShapeStyle(.quaternary), in: Capsule())
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -366,7 +366,7 @@ struct FindOverlayView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .foregroundStyle(scoreDimensionForeground(active: active, enabled: enabled))
-            .background(active ? AnyShapeStyle(activeGradient) : AnyShapeStyle(.quaternary), in: Capsule())
+            .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
     }
 
     private func segmentedOperator(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -376,7 +376,7 @@ struct FindOverlayView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(activeGradient) : AnyShapeStyle(.quaternary), in: Capsule())
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -425,14 +425,6 @@ struct FindOverlayView: View {
                 }
             }
         }
-    }
-
-    private var activeGradient: LinearGradient {
-        LinearGradient(
-            colors: [Color(red: 0.37, green: 0.36, blue: 0.90), Color(red: 0.75, green: 0.35, blue: 0.95)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
     }
 
     private var countText: String {

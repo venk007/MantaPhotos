@@ -71,10 +71,9 @@ final class AnalysisViewModel {
                     },
                     progressHandler: { [weak self] progress in
                         self?.analysisProgress = progress
-                    },
-                    didScoreBatch: { [weak self] in
-                        await self?.library?.refreshPhotos()
                     }
+                    // 不再逐批刷新照片页（每批刷新会全量重查并重拉可见缩略图，导致评分时卡顿）。
+                    // 进度条仍由 progressHandler 实时更新；照片分数在整轮结束后一次性刷新。
                 )
                 finishProgress(status: .completed)
             } catch is CancellationError {
@@ -83,6 +82,8 @@ final class AnalysisViewModel {
                 lastErrorMessage = error.localizedDescription
                 finishProgress(status: .failed)
             }
+            // 整轮评分结束后只刷新一次照片页。
+            await library?.refreshPhotos()
             clearActiveRun()
         }
     }
@@ -123,10 +124,8 @@ final class AnalysisViewModel {
                     },
                     progressHandler: { [weak self] progress in
                         self?.analysisProgress = progress
-                    },
-                    didScoreBatch: { [weak self] in
-                        await self?.library?.refreshPhotos()
                     }
+                    // 同上：不逐批刷新，整轮结束后统一刷新一次。
                 )
                 finishProgress(status: .completed)
             } catch is CancellationError {
@@ -135,6 +134,7 @@ final class AnalysisViewModel {
                 lastErrorMessage = error.localizedDescription
                 finishProgress(status: .failed)
             }
+            await library?.refreshPhotos()
             clearActiveRun()
         }
     }

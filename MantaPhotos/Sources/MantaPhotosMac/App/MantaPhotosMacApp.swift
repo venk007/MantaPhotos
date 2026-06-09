@@ -30,6 +30,18 @@ public struct MantaPhotosApp: App {
                 }
         }
         .commands {
+            CommandGroup(after: .sidebar) {
+                Button("Zoom In") {
+                    appState.navigation.adjustGridLevel(step: -1)
+                }
+                .keyboardShortcut("+", modifiers: [.command])
+
+                Button("Zoom Out") {
+                    appState.navigation.adjustGridLevel(step: 1)
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+            }
+
             CommandMenu("MantaPhotos") {
                 Button("Find") {
                     appState.navigation.isFindOverlayPresented.toggle()

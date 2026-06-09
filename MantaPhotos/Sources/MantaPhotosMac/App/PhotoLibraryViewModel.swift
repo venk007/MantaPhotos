@@ -26,6 +26,8 @@ final class PhotoLibraryViewModel {
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var didStartInitialImport = false
     @ObservationIgnored private let photoPageSize = 3_000
+    /// 触底加载的增量页：比首屏页小，单次快照 apply 更轻，滚动到底更平滑。
+    @ObservationIgnored private let loadMorePageSize = 800
 
     /// 由组合根（`AppState`）在 bootstrap 完成后注入数据库连接。
     func attach(databaseQueue: DatabaseQueue) {
@@ -137,11 +139,11 @@ final class PhotoLibraryViewModel {
         let offset = photoResults.count
         isLoadingMorePhotos = true
 
-        Task { [databaseQueue, filter, offset, photoPageSize] in
+        Task { [databaseQueue, filter, offset, loadMorePageSize] in
             do {
                 let repository = SearchRepository(databaseQueue: databaseQueue)
                 let nextResults = try await Task.detached(priority: .utility) {
-                    try repository.searchResults(filter: filter, limit: photoPageSize, offset: offset)
+                    try repository.searchResults(filter: filter, limit: loadMorePageSize, offset: offset)
                 }.value
 
                 let existingIDs = Set(photoResults.map(\.id))

@@ -541,7 +541,7 @@ Provider 规划：
 2. **批量领取**：每批从数据库领取 `batchSize = 200` 个 `pending` 任务。
 3. **批内并发评分**：用 `withThrowingTaskGroup` 以 `min(activeProcessorCount, 8)` 的并发度同时跑 `VNCalculateImageAestheticsScoresRequest`，配合 `Task.detached` 把 Vision 推理放到后台线程，充分利用 CPU/GPU/ANE。
 4. **单事务批量落库**：一批结果在一个数据库事务内批量写 `analysis_outputs` + `photo_scores` + 任务状态（`AnalysisRepository.activateAestheticScores`），再按 run 统一刷新计数。
-5. **每批仅刷新一次界面**：每处理完 200 张才回调 `didScoreBatch` 一次触发刷新。照片墙用 `NSCollectionViewDiffableDataSource`，ID 集合不变时只走 `refreshVisibleItems()` 就地更新可见 cell（不 reload），分数以「无闪烁、用户无感、照片上新增分数」的方式出现。
+5. **整轮结束后只刷新一次界面（2026-06-08 修正）**：评分时进度条由 `progressHandler` 实时更新，但照片墙**不再逐批刷新**——`AnalysisViewModel` 不再传 `didScoreBatch`，改为在整轮（完成 / 取消 / 失败）结束后调用一次 `refreshPhotos()`。原因：每批 `refreshPhotos()` 会全量重查数据库并对所有可见 cell 重新发起缩略图请求，评分进行中持续重拉缩略图是主要卡顿来源。代价是评分过程中分数不再边评边显，整轮结束统一出现，换取评分期间的滚动流畅。
 6. **暂停响应**：在每批边界检查 `isPauseRequested`；停止通过 Task 取消 + `cancelRun` 落库。
 
 ### 3.9 图片与视频处理
@@ -1387,6 +1387,15 @@ final class LocalizationManager: ObservableObject {
 - 设计令牌集中在 `DesignSystem`，不要在页面里散落颜色常量。
 - 液态玻璃效果基于 macOS 原生 material，避免用大面积自绘模糊造成卡顿。
 
+**液态玻璃令牌（`DesignSystem.Glass`，2026-06-08 落地）：**
+
+- `hairline` / `hairlineWidth`：玻璃表面统一发丝描边，所有浮层、侧栏、搜索条共用。
+- `activeTint`：选中态统一用系统强调色 `Color.accentColor`，贴近 macOS source list / 工具栏选择语义，避免每个 active 态都像独立品牌按钮。
+- `scrimLight` / `scrimDark`：浮层遮罩，刻意偏轻（0.12 / 0.22），不把玻璃压暗。
+- `viewerBackdrop`：查看器整屏底色（黑 0.9），深而不死黑，给悬浮 chrome 留层次。
+- `brandGradient`：**唯一保留**的品牌渐变，仅用于少数信号性强调态（当前为照片页角标指标段控），不再铺满所有选中态。
+- 圆角令牌 `Radius.chip / card / overlay` 取代页面里手写的魔法圆角。
+
 核心模型：
 
 ```swift
@@ -1571,6 +1580,12 @@ func importAll(
 - 16/32 列隐藏角标，优先保证密度与流畅度。
 - P0 验收必须覆盖 1 万资产；P3 覆盖 10 万资产。
 
+**滚动预热与触底加载优化（2026-06-08）：**
+
+- 预热节流：滚动通知不再每帧重算预热。`scrollViewBoundsDidChange` 改为合并同一 runloop 内的多次通知（`pendingPreheat` 标志），且滚动距离不足半个 item 高度时跳过重算。
+- 去掉每帧强制布局：预热不再每次 `layoutSubtreeIfNeeded()`，flow 布局属性按需可得，省掉高频强制布局开销。
+- 触底加载用更小增量页：`loadMorePhotosIfNeeded` 的增量页从首屏的 3000 降为 `loadMorePageSize = 800`，单次 diffable 快照 apply 体量更小，滚动到底更平滑（首屏页大小不变，保证首屏快速铺满）。
+
 ### 6.6 FindOverlay
 
 职责：
@@ -1586,6 +1601,10 @@ func importAll(
 - 关闭浮层后筛选条件仍保留。
 - 顶部横幅显示当前查找摘要，并提供清除入口。
 
+液态玻璃细化（2026-06-08）：背后遮罩用 `Glass.scrimLight/Dark`，权重刻意调轻；计数条与底部摘要条的黑色半透明背景改为系统 `.quaternary` 材质；浮层圆角/描边走 `Radius.overlay` + `Glass.hairline`；所有 active chip 统一为 `Glass.activeTint`（系统强调色）。
+
+搜索入口（2026-06-08 P1）：顶部栏不再放搜索胶囊，主搜索入口改为**底部液态玻璃导航坞右侧的独立圆形 🔍 按钮**（`LiquidGlassDock`），与 `⌘K` 等价。导航坞同时承载四个分区的快速跳转，顶部分区标签保留。
+
 ### 6.7 PhotoViewer
 
 职责：
@@ -1595,6 +1614,12 @@ func importAll(
 - 左右键切换上一张/下一张。
 - 展示元数据、评分、维度、标签、描述、建议。
 - 提供收藏、移入废片篓、恢复等操作。
+
+液态玻璃细化（2026-06-08）：整屏底色用 `Glass.viewerBackdrop`（深而不死黑）；顶部关闭/翻页按钮收进悬浮玻璃胶囊，底部操作条改为内缩的悬浮圆角玻璃条（`.ultraThinMaterial` + `Glass.hairline`）；`VideoPlayer`、`PHLivePhotoView` 与媒体请求逻辑保持不动。
+
+快捷键（2026-06-08 P1，对齐 Apple 照片）：上一/下一张 `←`/`→`，播放暂停 `空格`，收藏 `.`，查看信息 `⌘I`，删除到系统照片 `⌘⌫`，废片篓（App 软删除，自定义）`T`，关闭 `Esc`；网格缩放 `⌘+`/`⌘-`（菜单栏 View 命令），`⌘K` 打开 Find。
+
+手势（2026-06-08 P1，作用于静态图）：捏合缩放 1×–6×、放大后拖拽平移、双击在适配与 2.5× 间切换、未放大时左右滑动切换上一/下一张；切换照片自动复位缩放，视频与播放中的 Live Photo 用方向键/按钮切换。网格捏合改变缩放级别（既有）。
 
 ---
 
