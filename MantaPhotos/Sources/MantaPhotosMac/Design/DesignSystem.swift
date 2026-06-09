@@ -57,7 +57,9 @@ enum DesignSystem {
 
     enum Metrics {
         static let sidebarWidth: CGFloat = 252
-        static let topBarHeight: CGFloat = 54
+        /// 顶部标签栏固定高度。集中常量 + `.frame(height:)` 强约束，
+        /// 保证有无照片、各分区菜单切换时高度完全一致、不被内容撑高。
+        static let topBarHeight: CGFloat = 48
         static let bottomBarHeight: CGFloat = 36
     }
 
