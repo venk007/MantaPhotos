@@ -22,20 +22,29 @@ struct DatabaseMigratorTests {
             let deviceCategoryCount = try Int.fetchOne(database, sql: "select count(*) from pragma_table_info('photo_assets') where name = 'device_category';")
             let reportTableCount = try Int.fetchOne(database, sql: "select count(*) from sqlite_master where type = 'table' and name = 'reports';")
             let faceTableCount = try Int.fetchOne(database, sql: "select count(*) from sqlite_master where type = 'table' and name = 'person_faces';")
+            let sourceTableCount = try Int.fetchOne(database, sql: "select count(*) from sqlite_master where type = 'table' and name = 'photo_sources';")
+            let sourceIDColumnCount = try Int.fetchOne(database, sql: "select count(*) from pragma_table_info('photo_assets') where name = 'source_id';")
+            let systemSourceCount = try Int.fetchOne(database, sql: "select count(*) from photo_sources where id = 'system_photos';")
 
             return (
                 modelCount: modelCount,
                 deviceCategoryCount: deviceCategoryCount,
                 reportTableCount: reportTableCount,
-                faceTableCount: faceTableCount
+                faceTableCount: faceTableCount,
+                sourceTableCount: sourceTableCount,
+                sourceIDColumnCount: sourceIDColumnCount,
+                systemSourceCount: systemSourceCount
             )
         }
 
-        #expect(migrationCount == 4)
+        #expect(migrationCount == 5)
         #expect(schemaChecks.modelCount == 1)
         #expect(schemaChecks.deviceCategoryCount == 1)
         #expect(schemaChecks.reportTableCount == 1)
         #expect(schemaChecks.faceTableCount == 1)
+        #expect(schemaChecks.sourceTableCount == 1)
+        #expect(schemaChecks.sourceIDColumnCount == 1)
+        #expect(schemaChecks.systemSourceCount == 1)
     }
 
     @Test
