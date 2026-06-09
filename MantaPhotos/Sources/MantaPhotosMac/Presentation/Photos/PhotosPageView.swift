@@ -310,7 +310,7 @@ struct BadgeSegmentView: View {
                 .overlay {
                     if appState.navigation.badgeMetric == metric {
                         RoundedRectangle(cornerRadius: DesignSystem.Radius.control)
-                            .fill(DesignSystem.Glass.brandGradient)
+                            .fill(DesignSystem.Glass.activeTint)
                     }
                 }
         }

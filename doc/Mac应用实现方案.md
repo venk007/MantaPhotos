@@ -1396,6 +1396,15 @@ final class LocalizationManager: ObservableObject {
 - `brandGradient`：**唯一保留**的品牌渐变，仅用于少数信号性强调态（当前为照片页角标指标段控），不再铺满所有选中态。
 - 圆角令牌 `Radius.chip / card / overlay` 取代页面里手写的魔法圆角。
 
+**macOS 27 半透明度滑块前瞻适配（2026-06-09，material-first）：**
+
+WWDC 2026 的 macOS 27「Golden Gate」新增了 Liquid Glass 半透明度 / 着色滑块。为确保新系统发布后无需改动即可适配，遵循以下原则：
+
+- **一切浮层 chrome 用系统 `Material`**（`.regularMaterial` / `.ultraThinMaterial` / `.thinMaterial`）。系统 Material 会自动跟随半透明度滑块、浅/深色与系统强调色，无需我们做任何事。
+- **不放固定颜色的自绘 chrome**：已移除固定白色发丝描边（改 `Color.primary.opacity`，自适应外观）与唯一的品牌渐变（角标段控改系统强调色）。选中态一律 `Color.accentColor`。
+- **保留的固定色仅限非 chrome**：阴影（与玻璃浓淡无关）、查看器深底（内容呈现）、评分色阶（数据可视化）。
+- **未来采用 `.glassEffect()`（macOS 26+）是本地化改动**：因为浮层背景已统一收口为 `DesignSystem.Glass` + `.background(.regularMaterial, in:)`，届时只需在这些集中点替换，不触碰业务代码。
+
 核心模型：
 
 ```swift

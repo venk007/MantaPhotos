@@ -27,32 +27,29 @@ enum DesignSystem {
     }
 
     /// 液态玻璃专用令牌：描边、遮罩、强调态。
+    ///
+    /// macOS 26 / 27 Liquid Glass 适配原则（material-first）：
+    /// 所有浮层 chrome 一律用系统 `Material`（`.regularMaterial` / `.ultraThinMaterial` 等），
+    /// 它会**自动跟随 macOS 27 的「半透明度」滑块**与浅/深色、系统强调色。
+    /// 这里只保留**会随外观自适应**的少量装饰令牌，不再放任何固定颜色的自绘 chrome
+    /// （固定白色描边、品牌渐变已移除）。未来若采用 `.glassEffect()`（macOS 26+），
+    /// 只需在这一处与各 `.background(.regularMaterial, in:)` 调用点本地替换即可。
     enum Glass {
-        /// 玻璃表面的细发丝描边，统一所有浮层/侧栏/搜索条的边缘。
-        static let hairline = Color.white.opacity(0.18)
+        /// 玻璃发丝描边：用 `primary` 透明度，浅/深色与不同玻璃浓淡下都自适应；
+        /// 不再用固定白色（固定白在浅色 / 低透明玻璃上会发灰发脏，且不跟随半透明度滑块）。
+        static let hairline = Color.primary.opacity(0.12)
         static let hairlineWidth: CGFloat = 0.5
 
-        /// 选中态统一使用系统强调色，贴近 macOS 原生 source list / 工具栏选择语义，
-        /// 而不是让每个 active 状态都像独立品牌按钮（见重构清单 P2）。
+        /// 选中态统一使用系统强调色（跟随用户的系统强调色设置），不使用任何自绘渐变，
+        /// 贴近 macOS 原生 source list / 工具栏选择语义。
         static let activeTint = Color.accentColor
 
-        /// 浮层背后的遮罩：刻意更轻，避免把玻璃压暗（见重构清单 P3）。
+        /// 浮层背后的遮罩：模态变暗层，与玻璃浓淡无关，刻意保持克制（见重构清单 P3）。
         static let scrimLight = Color.black.opacity(0.12)
         static let scrimDark = Color.black.opacity(0.22)
 
-        /// 查看器整屏底色：深而不死黑，给玻璃 chrome 留出层次（见重构清单 P4）。
+        /// 查看器整屏底色：照片置于深底之上（系统照片查看器同理），属内容呈现而非 chrome。
         static let viewerBackdrop = Color.black.opacity(0.9)
-
-        /// 保留的「唯一」品牌渐变，仅用于少数信号性强调态（如角标指标切换），
-        /// 不再铺满所有选中态。
-        static let brandGradient = LinearGradient(
-            colors: [
-                Color(red: 0.37, green: 0.36, blue: 0.90),
-                Color(red: 0.75, green: 0.35, blue: 0.95)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
     }
 
     enum Metrics {
