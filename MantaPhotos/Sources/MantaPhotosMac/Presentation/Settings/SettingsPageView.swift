@@ -16,7 +16,7 @@ struct SettingsPageView: View {
 
                 Picker(appState.localized("Language"), selection: $navigation.appLanguage) {
                     ForEach(AppLanguage.allCases) { language in
-                        Text(appState.localized(language.localizationKey)).tag(language)
+                        Text(language.nativeName ?? appState.localized(language.localizationKey)).tag(language)
                     }
                 }
 

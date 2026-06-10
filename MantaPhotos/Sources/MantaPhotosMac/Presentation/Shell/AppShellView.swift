@@ -15,6 +15,9 @@ struct AppShellView: View {
                             .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                 }
+                // 内容区始终撑满：否则像 Timeline/Reports/Settings 这类非贪婪内容会让整个
+                // VStack 在外层 ZStack 里垂直居中，顶部标签栏上方出现大块空白。
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 BottomBarView()
             }
@@ -234,11 +237,7 @@ struct SidebarOverlayView: View {
         HStack(spacing: 0) {
             SidebarView()
                 .frame(width: DesignSystem.Metrics.sidebarWidth)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
-                .overlay {
-                    RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
-                        .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-                }
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
                 .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
                 .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
 
@@ -248,7 +247,7 @@ struct SidebarOverlayView: View {
                 Image(systemName: appState.navigation.isSidebarExpanded ? "chevron.left" : "chevron.right")
                     .font(.caption.weight(.bold))
                     .frame(width: 20, height: 128)
-                    .background(.regularMaterial, in: UnevenRoundedRectangle(
+                    .glassEffect(.regular, in: UnevenRoundedRectangle(
                         topLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
                         bottomLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
                         bottomTrailingRadius: 10,
@@ -280,10 +279,7 @@ struct LiquidGlassDock: View {
                 }
             }
             .padding(6)
-            .background(.regularMaterial, in: Capsule())
-            .overlay {
-                Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-            }
+            .glassEffect(.regular, in: Capsule())
             .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
 
             Button {
@@ -293,10 +289,7 @@ struct LiquidGlassDock: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 46, height: 46)
-                    .background(.regularMaterial, in: Circle())
-                    .overlay {
-                        Circle().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-                    }
+                    .glassEffect(.regular, in: Circle())
             }
             .buttonStyle(.plain)
             .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)

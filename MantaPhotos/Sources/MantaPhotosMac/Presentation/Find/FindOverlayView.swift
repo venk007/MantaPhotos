@@ -34,11 +34,7 @@ struct FindOverlayView: View {
                 footer
             }
             .frame(width: 760, height: 660)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
-            .overlay {
-                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
-                    .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-            }
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
             .shadow(color: .black.opacity(0.24), radius: 30, x: 0, y: 16)
         }
         .onAppear {

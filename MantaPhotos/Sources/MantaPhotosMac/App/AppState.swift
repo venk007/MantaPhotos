@@ -193,6 +193,16 @@ enum AppLanguage: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// 各语言以「母语名」展示（语言选择器惯例）：简体中文 / English。
+    /// 系统项保持可本地化（跟随系统 / Follow System）。
+    var nativeName: String? {
+        switch self {
+        case .system: nil
+        case .zhHans: "简体中文"
+        case .en: "English"
+        }
+    }
+
     var locale: Locale {
         switch self {
         case .system:

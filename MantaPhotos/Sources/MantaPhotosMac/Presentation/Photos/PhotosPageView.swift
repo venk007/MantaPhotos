@@ -273,7 +273,7 @@ struct ZoomControlView: View {
         }
         .buttonStyle(.borderless)
         .padding(4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
     }
 
     private var currentIndex: Int {
@@ -290,7 +290,7 @@ struct BadgeSegmentView: View {
             segment(.overall, icon: "star")
         }
         .padding(3)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
     }
 
     private func segment(_ metric: BadgeMetric, icon: String) -> some View {
