@@ -26,6 +26,15 @@ final class PhotoLibraryViewModel {
 
     /// 当前所有照片源（系统图库 + 本地目录等）。
     private(set) var sources: [PhotoSourceDescriptor] = []
+    /// 各源当前是否可访问（sourceID → 可用）。每次启动判定：系统图库看授权 + 探测；本地源看路径可达 + 书签可解析。
+    private(set) var sourceAvailability: [String: Bool] = [:]
+
+    /// 当前可访问的源 id 集合，供搜索 / 筛选 / 照片墙限定。
+    /// 尚未判定（空字典）时返回 nil（不限制）；判定后返回可访问集合（可能为空 = 无可访问源）。
+    var accessibleSourceIDs: Set<String>? {
+        guard !sourceAvailability.isEmpty else { return [] }
+        return Set(sourceAvailability.filter(\.value).map(\.key))
+    }
 
     @ObservationIgnored private var databaseQueue: DatabaseQueue?
     @ObservationIgnored private var sourceRepository: PhotoSourceRepository?
@@ -43,24 +52,71 @@ final class PhotoLibraryViewModel {
 
     // MARK: - 照片源管理
 
-    /// 读取所有源，解析本地源书签并注册到 `PhotoSourceRegistry`（开启安全作用域）。
+    /// 读取所有源、判定可用性、解析可访问的本地源书签并注册到 `PhotoSourceRegistry`。
     /// 在 bootstrap 时调用一次。
-    func loadAndRegisterSources() {
+    ///
+    /// 关键：书签解析（`resolvingBookmarkData`）对已弹出的外置卷会**长时间阻塞**，
+    /// 必须放到后台线程，且先用 `rootPath` 可达性做快速门，避免主线程卡死（曾导致主界面无响应）。
+    func loadAndRegisterSources() async {
         PhotoSourceRegistry.shared.register(descriptor: .systemPhotos, resolvedRoot: nil)
         guard let sourceRepository else { return }
+        let descriptors: [PhotoSourceDescriptor]
         do {
-            let descriptors = try sourceRepository.allSources()
-            sources = descriptors
-            for descriptor in descriptors where descriptor.kind.isFileBased {
-                guard descriptor.isEnabled, let bookmark = descriptor.rootBookmark else { continue }
-                if let url = Self.resolveBookmark(bookmark) {
-                    _ = url.startAccessingSecurityScopedResource()
-                    PhotoSourceRegistry.shared.register(descriptor: descriptor, resolvedRoot: url)
-                }
-            }
+            descriptors = try sourceRepository.allSources()
         } catch {
             reportError(error)
+            return
         }
+        sources = descriptors
+
+        let fileSources = descriptors.filter { $0.kind.isFileBased && $0.isEnabled && $0.rootBookmark != nil }
+
+        // 全部解析与探测放后台，主线程（run loop）不被阻塞。
+        let outcome = await Task.detached(priority: .userInitiated) { () -> (system: Bool, resolved: [(String, URL?)]) in
+            let systemOK = Self.isSystemPhotosAccessible()
+            let resolved: [(String, URL?)] = fileSources.map { descriptor in
+                // 快速门：rootPath 不可达（卷已弹出 / 目录被删）→ 直接判不可用，跳过会阻塞的书签解析。
+                if let path = descriptor.rootPath, !FileManager.default.fileExists(atPath: path) {
+                    return (descriptor.id, nil)
+                }
+                guard let bookmark = descriptor.rootBookmark,
+                      let url = Self.resolveBookmark(bookmark),
+                      url.startAccessingSecurityScopedResource(),
+                      (try? url.checkResourceIsReachable()) == true else {
+                    return (descriptor.id, nil)
+                }
+                return (descriptor.id, url)
+            }
+            return (systemOK, resolved)
+        }.value
+
+        // 回到主线程更新注册表与可用性。
+        var availability: [String: Bool] = [:]
+        availability[PhotoSourceDescriptor.systemPhotosID] = outcome.system
+        for (id, url) in outcome.resolved {
+            if let url, let descriptor = descriptors.first(where: { $0.id == id }) {
+                PhotoSourceRegistry.shared.register(descriptor: descriptor, resolvedRoot: url)
+                availability[id] = true
+            } else {
+                PhotoSourceRegistry.shared.unregister(sourceID: id)
+                availability[id] = false
+            }
+        }
+        // 被停用 / 无书签的文件源标记为不可用（用于设置页展示）。
+        for descriptor in descriptors where availability[descriptor.id] == nil {
+            availability[descriptor.id] = descriptor.kind == .systemPhotos ? outcome.system : false
+        }
+        sourceAvailability = availability
+    }
+
+    /// 系统图库是否可访问：需 PhotoKit 授权，且能探测到至少一项资产（库卷已弹出时探测为空）。
+    /// 注：探测在后台调用。授权但库卷不可达的精确检测受公共 API 限制，以「能取到 1 项」为近似信号。
+    nonisolated private static func isSystemPhotosAccessible() -> Bool {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return false }
+        let options = PHFetchOptions()
+        options.fetchLimit = 1
+        return PHAsset.fetchAssets(with: options).count > 0
     }
 
     /// 添加一个本地目录源：保存安全作用域书签、注册、后台扫描导入。
@@ -129,7 +185,7 @@ final class PhotoLibraryViewModel {
         }
     }
 
-    private static func resolveBookmark(_ data: Data) -> URL? {
+    nonisolated private static func resolveBookmark(_ data: Data) -> URL? {
         var isStale = false
         return try? URL(
             resolvingBookmarkData: data,
@@ -222,7 +278,7 @@ final class PhotoLibraryViewModel {
         defer { isRefreshingPhotos = false }
 
         do {
-            let repository = SearchRepository(databaseQueue: databaseQueue)
+            let repository = SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
             photoResults = try await Task.detached(priority: .userInitiated) {
                 try repository.searchResults(filter: filter, limit: limit)
             }.value
@@ -245,9 +301,9 @@ final class PhotoLibraryViewModel {
         let offset = photoResults.count
         isLoadingMorePhotos = true
 
-        Task { [databaseQueue, filter, offset, loadMorePageSize] in
+        Task { [databaseQueue, filter, offset, loadMorePageSize, accessibleSourceIDs] in
             do {
-                let repository = SearchRepository(databaseQueue: databaseQueue)
+                let repository = SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
                 let nextResults = try await Task.detached(priority: .utility) {
                     try repository.searchResults(filter: filter, limit: loadMorePageSize, offset: offset)
                 }.value
@@ -269,7 +325,7 @@ final class PhotoLibraryViewModel {
     /// 当前筛选条件命中的全部照片 ID。
     func matchedPhotoIDs() throws -> [String] {
         guard let databaseQueue else { return [] }
-        return try SearchRepository(databaseQueue: databaseQueue).searchIDs(filter: searchFilter)
+        return try SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs).searchIDs(filter: searchFilter)
     }
 
     // MARK: - 查看器
@@ -298,7 +354,7 @@ final class PhotoLibraryViewModel {
     func searchSimilar(to result: PhotoSearchResult, spaceKey: String) {
         guard let databaseQueue else { return }
         let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
-        let search = SearchRepository(databaseQueue: databaseQueue)
+        let search = SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
         let queryID = result.id
         closeViewer()
         Task {
@@ -331,7 +387,7 @@ final class PhotoLibraryViewModel {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let databaseQueue else { return }
         let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
-        let search = SearchRepository(databaseQueue: databaseQueue)
+        let search = SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
         let provider = EmbeddingProviderRegistry.provider(forKey: spaceKey)
         Task {
             do {

@@ -153,10 +153,13 @@ struct PhotoLibraryAdapter {
     }
 
     func setFavorite(localIdentifier: String, isFavorite: Bool) async throws {
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
-        guard let asset = result.firstObject else {
-            throw PhotoLibraryAdapterError.assetNotFound(localIdentifier)
-        }
+        let asset = try await Task.detached(priority: .userInitiated) {
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+            guard let asset = result.firstObject else {
+                throw PhotoLibraryAdapterError.assetNotFound(localIdentifier)
+            }
+            return asset
+        }.value
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges {
@@ -175,10 +178,13 @@ struct PhotoLibraryAdapter {
     }
 
     func deleteAsset(localIdentifier: String) async throws {
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
-        guard let asset = result.firstObject else {
-            throw PhotoLibraryAdapterError.assetNotFound(localIdentifier)
-        }
+        let asset = try await Task.detached(priority: .userInitiated) {
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+            guard let asset = result.firstObject else {
+                throw PhotoLibraryAdapterError.assetNotFound(localIdentifier)
+            }
+            return asset
+        }.value
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges {
@@ -197,10 +203,14 @@ struct PhotoLibraryAdapter {
 
     func deleteAssets(localIdentifiers: [String]) async throws {
         guard !localIdentifiers.isEmpty else { return }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
-        guard result.count > 0 else { return }
-        var assets: [PHAsset] = []
-        result.enumerateObjects { asset, _, _ in assets.append(asset) }
+        let assets = await Task.detached(priority: .userInitiated) {
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+            guard result.count > 0 else { return [PHAsset]() }
+            var assets: [PHAsset] = []
+            result.enumerateObjects { asset, _, _ in assets.append(asset) }
+            return assets
+        }.value
+        guard !assets.isEmpty else { return }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges {

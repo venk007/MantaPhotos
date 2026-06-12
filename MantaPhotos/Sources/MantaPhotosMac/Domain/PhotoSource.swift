@@ -63,18 +63,39 @@ public struct PhotoSourceDescriptor: Identifiable, Equatable, Sendable {
 
 /// 缩略图请求句柄：抽象掉 `PHImageRequestID`，让系统源（PhotoKit）与本地源（Task）统一可取消。
 /// 仅在主线程使用。
-public final class ThumbnailRequestToken {
-    private let onCancel: () -> Void
+public final class ThumbnailRequestToken: @unchecked Sendable {
+    private var onCancel: (() -> Void)?
     private var isCancelled = false
+    private let lock = NSLock()
 
-    public init(onCancel: @escaping () -> Void) {
+    public init(onCancel: (() -> Void)? = nil) {
         self.onCancel = onCancel
     }
 
+    public func setOnCancel(_ onCancel: @escaping () -> Void) {
+        lock.lock()
+        let shouldCancel = isCancelled
+        if !shouldCancel {
+            self.onCancel = onCancel
+        }
+        lock.unlock()
+        
+        if shouldCancel {
+            onCancel()
+        }
+    }
+
     public func cancel() {
-        guard !isCancelled else { return }
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            return
+        }
         isCancelled = true
-        onCancel()
+        let action = onCancel
+        lock.unlock()
+        
+        action?()
     }
 }
 

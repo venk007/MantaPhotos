@@ -44,30 +44,36 @@ final class PhotoThumbnailProvider: @unchecked Sendable {
         targetSize: CGSize,
         completion: @MainActor @escaping (NSImage?) -> Void
     ) -> ThumbnailRequestToken? {
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
-        guard let asset = result.firstObject else {
-            Task { @MainActor in completion(nil) }
-            return nil
+        let token = ThumbnailRequestToken()
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+            guard let asset = result.firstObject, let self = self else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .opportunistic
+            options.resizeMode = .fast
+            options.isNetworkAccessAllowed = false
+            options.isSynchronous = false
+
+            let requestID = self.imageManager.requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: options
+            ) { image, _ in
+                Task { @MainActor in completion(image) }
+            }
+
+            token.setOnCancel { [weak self] in
+                self?.imageManager.cancelImageRequest(requestID)
+            }
         }
 
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = false
-        options.isSynchronous = false
-
-        let requestID = imageManager.requestImage(
-            for: asset,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: options
-        ) { image, _ in
-            Task { @MainActor in completion(image) }
-        }
-
-        return ThumbnailRequestToken { [weak self] in
-            self?.imageManager.cancelImageRequest(requestID)
-        }
+        return token
     }
 
     func cancel(_ token: ThumbnailRequestToken?) {
@@ -75,26 +81,32 @@ final class PhotoThumbnailProvider: @unchecked Sendable {
     }
 
     func startCaching(assets: [PhotoAsset], targetSize: CGSize) {
-        let phAssets = systemPHAssets(from: assets)
-        guard !phAssets.isEmpty else { return }
-        imageManager.startCachingImages(
-            for: phAssets,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: nil
-        )
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            let phAssets = self.systemPHAssets(from: assets)
+            guard !phAssets.isEmpty else { return }
+            self.imageManager.startCachingImages(
+                for: phAssets,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: nil
+            )
+        }
         // 本地源缩略图由 LocalThumbnailProvider 惰性缓存，无需在此预热。
     }
 
     func stopCaching(assets: [PhotoAsset], targetSize: CGSize) {
-        let phAssets = systemPHAssets(from: assets)
-        guard !phAssets.isEmpty else { return }
-        imageManager.stopCachingImages(
-            for: phAssets,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: nil
-        )
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return }
+            let phAssets = self.systemPHAssets(from: assets)
+            guard !phAssets.isEmpty else { return }
+            self.imageManager.stopCachingImages(
+                for: phAssets,
+                targetSize: targetSize,
+                contentMode: .aspectFill,
+                options: nil
+            )
+        }
     }
 
     private func systemPHAssets(from assets: [PhotoAsset]) -> [PHAsset] {
