@@ -4,6 +4,7 @@ struct FindOverlayView: View {
     @Environment(AppState.self) private var appState
     @FocusState private var queryFocused: Bool
     @State private var sidebarWasExpanded = false
+    @State private var tagOptions: [PhotoTagOption] = []
 
     var body: some View {
         @Bindable var library = appState.library
@@ -77,6 +78,16 @@ struct FindOverlayView: View {
             .frame(height: 42)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.card))
 
+            if currentModelSupportsText {
+                Button {
+                    runSemanticSearch()
+                } label: {
+                    Label("语义搜索", systemImage: "sparkle.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .disabled(appState.library.searchFilter.keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
             Button {
                 appState.library.searchFilter = SearchFilterState()
             } label: {
@@ -94,6 +105,19 @@ struct FindOverlayView: View {
             .help(appState.localized("Close"))
         }
         .padding(18)
+    }
+
+    private var currentModelSupportsText: Bool {
+        EmbeddingProviderRegistry.allDescriptors
+            .first { $0.key == appState.navigation.vectorModelKey }?.supportsTextQuery ?? false
+    }
+
+    private func runSemanticSearch() {
+        appState.library.semanticSearch(
+            query: appState.library.searchFilter.keyword,
+            spaceKey: appState.navigation.vectorModelKey
+        )
+        appState.navigation.isFindOverlayPresented = false
     }
 
     private var countBar: some View {
@@ -265,20 +289,43 @@ struct FindOverlayView: View {
     }
 
     private var tagSection: some View {
-        findSection("Tags", icon: "tag", isClearVisible: false, clear: {}) {
-            VStack(alignment: .leading, spacing: 8) {
-                searchPlaceholder("Search tags")
+        findSection("Tags", icon: "tag", isClearVisible: !appState.library.searchFilter.tagIDs.isEmpty) {
+            appState.library.searchFilter.tagIDs = []
+        } content: {
+            if tagOptions.isEmpty {
+                Text(appState.localized("No tags yet"))
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            } else {
                 FlowLayout(spacing: 8) {
-                    disabledChip("Landscape", icon: "mountain.2")
-                    disabledChip("People", icon: "person")
-                    disabledChip("Architecture", icon: "building.2")
-                    disabledChip("Food", icon: "fork.knife")
-                    disabledChip("Travel", icon: "airplane")
-                    disabledChip("Night", icon: "moon.stars")
-                    disabledChip("Pet", icon: "pawprint")
+                    ForEach(tagOptions) { option in
+                        tagChip(option)
+                    }
                 }
             }
         }
+        .task {
+            tagOptions = await appState.library.topTags()
+        }
+    }
+
+    private func tagChip(_ option: PhotoTagOption) -> some View {
+        let active = appState.library.searchFilter.tagIDs.contains(option.id)
+        return Button {
+            if active {
+                appState.library.searchFilter.tagIDs.remove(option.id)
+            } else {
+                appState.library.searchFilter.tagIDs.insert(option.id)
+            }
+        } label: {
+            Text(option.displayName)
+                .font(.callout)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .foregroundStyle(active ? .white : .secondary)
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var footer: some View {

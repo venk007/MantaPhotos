@@ -29,6 +29,7 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Sources/MantaPhotosMacApp
+      - path: Sources/MantaPhotosMacApp/Assets.xcassets
     dependencies:
       - package: MantaPhotos
         product: MantaPhotosCore
@@ -49,6 +50,7 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         DEAD_CODE_STRIPPING: YES
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/../Frameworks"

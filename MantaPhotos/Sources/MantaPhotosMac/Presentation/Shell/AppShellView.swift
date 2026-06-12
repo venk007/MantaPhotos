@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct AppShellView: View {
@@ -129,6 +130,18 @@ struct AppKeyboardShortcutView: NSViewRepresentable {
                     return nil
                 }
 
+                // Tab：在照片页（且无浮层/无文本框聚焦）切换左侧抽屉。
+                if event.keyCode == 48, modifiers.isEmpty, MainActor.assumeIsolated({
+                    guard appState.navigation.route == .photos,
+                          !appState.navigation.isFindOverlayPresented,
+                          !(appState.library.isViewerPresented),
+                          !(NSApp.keyWindow?.firstResponder is NSTextView) else { return false }
+                    appState.navigation.isSidebarExpanded.toggle()
+                    return true
+                }) {
+                    return nil
+                }
+
                 return event
             }
         }
@@ -151,7 +164,10 @@ struct TopBarView: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
+                if appState.navigation.route == .photos {
+                    sidebarToggleButton
+                }
                 logoButton
                 navTabs
             }
@@ -164,13 +180,22 @@ struct TopBarView: View {
         .frame(height: DesignSystem.Metrics.topBarHeight)
     }
 
+    /// macOS 原生风格的侧栏开关（SF Symbol），等价于 Tab 键。
+    private var sidebarToggleButton: some View {
+        Button {
+            appState.navigation.isSidebarExpanded.toggle()
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .font(.body)
+                .symbolVariant(appState.navigation.isSidebarExpanded ? .fill : .none)
+        }
+        .buttonStyle(.borderless)
+        .help("显示 / 隐藏侧栏（Tab）")
+    }
+
     private var logoButton: some View {
         Button {
-            if appState.navigation.route == .photos {
-                appState.navigation.isSidebarExpanded.toggle()
-            } else {
-                appState.navigation.route = .photos
-            }
+            appState.navigation.route = .photos
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "camera")
@@ -179,7 +204,6 @@ struct TopBarView: View {
             }
         }
         .buttonStyle(.plain)
-        .help("Show or hide sidebar")
     }
 
     private var navTabs: some View {
@@ -192,7 +216,7 @@ struct TopBarView: View {
 
     private var trailingControls: some View {
         HStack(spacing: 12) {
-            AnalysisProgressView(progress: appState.analysis.analysisProgress)
+            MultiTaskStatusView()
 
             Button {
                 appState.navigation.themeMode = appState.navigation.themeMode.nextMode
@@ -239,26 +263,12 @@ struct SidebarOverlayView: View {
                 .frame(width: DesignSystem.Metrics.sidebarWidth)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
                 .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
-                .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
-
-            Button {
-                appState.navigation.isSidebarExpanded.toggle()
-            } label: {
-                Image(systemName: appState.navigation.isSidebarExpanded ? "chevron.left" : "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .frame(width: 20, height: 128)
-                    .glassEffect(.regular, in: UnevenRoundedRectangle(
-                        topLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
-                        bottomLeadingRadius: appState.navigation.isSidebarExpanded ? 0 : 10,
-                        bottomTrailingRadius: 10,
-                        topTrailingRadius: 10
-                    ))
-            }
-            .buttonStyle(.plain)
-            .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 20)
+                .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 32)
+            Spacer(minLength: 0)
         }
         .padding(.leading, 16)
         .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
+        .allowsHitTesting(appState.navigation.isSidebarExpanded)
         .zIndex(5)
     }
 }

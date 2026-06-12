@@ -69,6 +69,60 @@ public struct PhotoAssetRepository: Sendable {
         }
     }
 
+    // MARK: - 废片篓批量
+
+    public struct TrashedLocator: Sendable {
+        public var id: String
+        public var sourceID: String
+        public var localIdentifier: String
+        public var relativePath: String?
+    }
+
+    public func restoreAllTrashed() throws {
+        let now = DateCoding.string(from: Date()) ?? ""
+        try databaseQueue.write { database in
+            try database.execute(
+                sql: "update photo_assets set in_trash = 0, trashed_at = null, updated_at = ? where in_trash = 1;",
+                arguments: [now]
+            )
+        }
+    }
+
+    public func trashedLocators() throws -> [TrashedLocator] {
+        try databaseQueue.read { database in
+            try Row.fetchAll(
+                database,
+                sql:
+                    """
+                    select id, source_id, local_identifier, relative_path
+                    from photo_assets
+                    where in_trash = 1 and system_deleted_at is null;
+                    """
+            ).map {
+                TrashedLocator(
+                    id: $0["id"],
+                    sourceID: ($0["source_id"] as String?) ?? PhotoAsset.systemPhotosSourceID,
+                    localIdentifier: $0["local_identifier"],
+                    relativePath: $0["relative_path"]
+                )
+            }
+        }
+    }
+
+    public func markSystemDeleted(photoIDs: [String], deletedAt: Date = Date()) throws {
+        guard !photoIDs.isEmpty else { return }
+        let now = DateCoding.string(from: Date()) ?? ""
+        let deleted = DateCoding.string(from: deletedAt)
+        try databaseQueue.write { database in
+            for id in photoIDs {
+                try database.execute(
+                    sql: "update photo_assets set system_deleted_at = ?, updated_at = ? where id = ?;",
+                    arguments: [deleted, now, id]
+                )
+            }
+        }
+    }
+
     private func upsert(_ asset: PhotoAsset, now: String, database: Database) throws {
         let sourceTypeRaw = asset.isSystemPhotos ? "photos_library" : "local_directory"
         let values: [(any DatabaseValueConvertible)?] = [

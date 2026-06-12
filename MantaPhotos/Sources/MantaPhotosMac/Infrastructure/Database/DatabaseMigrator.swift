@@ -49,8 +49,51 @@ public struct DatabaseMigrator {
         Migration(version: 2, name: "p1_search_and_analysis", sql: p1SearchAndAnalysisSQL),
         Migration(version: 3, name: "p0_p1_schema_expansion", sql: p0P1SchemaExpansionSQL),
         Migration(version: 4, name: "drop_thumbnail_cache_index", sql: dropThumbnailCacheIndexSQL),
-        Migration(version: 5, name: "multi_photo_source", sql: multiPhotoSourceSQL)
+        Migration(version: 5, name: "multi_photo_source", sql: multiPhotoSourceSQL),
+        Migration(version: 6, name: "p2_embeddings_and_type", sql: p2EmbeddingsAndTypeSQL)
     ]
+
+    // P2：向量空间 + 嵌入存储 + 类型(RAW)。
+    // 设计要点：不同模型向量长度不同 → 用单表 photo_embeddings + space_id 区分，
+    // 向量以变长 blob 保存、维度随空间记录；KNN 查询始终按 space_id 限定，确保只用指定模型的向量。
+    private static let p2EmbeddingsAndTypeSQL =
+        """
+        create table if not exists embedding_spaces (
+          id text primary key,
+          model_key text not null unique,
+          display_name text not null,
+          dimension integer not null,
+          modality text not null,
+          last_used_at text,
+          created_at text not null,
+          updated_at text not null
+        );
+
+        create table if not exists photo_embeddings (
+          photo_id text not null references photo_assets(id) on delete cascade,
+          space_id text not null references embedding_spaces(id) on delete cascade,
+          dimension integer not null,
+          vector blob not null,
+          updated_at text not null,
+          primary key (photo_id, space_id)
+        );
+
+        create index if not exists idx_photo_embeddings_space on photo_embeddings(space_id);
+
+        -- 各分析任务的「已处理」标记（标签/类型/地理位置等的幂等去重；向量用 photo_embeddings 自身判断）。
+        create table if not exists photo_analysis_state (
+          photo_id text not null references photo_assets(id) on delete cascade,
+          kind text not null,
+          analyzed_at text not null,
+          primary key (photo_id, kind)
+        );
+        create index if not exists idx_photo_analysis_state_kind on photo_analysis_state(kind);
+
+        alter table photo_assets add column is_raw integer not null default 0;
+
+        insert or ignore into app_settings(key, value, updated_at)
+        values ('analysis.vectorModel', 'apple.featureprint', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        """
 
     // 多照片源：新增 photo_sources 表，photo_assets 增补 source 定位字段，并把存量行回填到系统源。
     // 注意：不重写 photo_assets.id（保留与 photo_scores / analysis_tasks 等外键关系），
@@ -201,7 +244,7 @@ public struct DatabaseMigrator {
         values
           ('appearance.theme', 'system', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
           ('appearance.language', 'system', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          ('photos.gridLevel', '4', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          ('photos.gridLevel', '5', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
           ('photos.badgeMetric', 'aesthetic', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
           ('analysis.visionEnabled', 'false', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
         """

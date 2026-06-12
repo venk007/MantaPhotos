@@ -1626,7 +1626,7 @@ func importAll(
 
 液态玻璃细化（2026-06-08）：整屏底色用 `Glass.viewerBackdrop`（深而不死黑）；顶部关闭/翻页按钮收进悬浮玻璃胶囊，底部操作条改为内缩的悬浮圆角玻璃条（`.ultraThinMaterial` + `Glass.hairline`）；`VideoPlayer`、`PHLivePhotoView` 与媒体请求逻辑保持不动。
 
-快捷键（2026-06-08 P1，对齐 Apple 照片）：上一/下一张 `←`/`→`，播放暂停 `空格`，收藏 `.`，查看信息 `⌘I`，删除到系统照片 `⌘⌫`，废片篓（App 软删除，自定义）`T`，关闭 `Esc`；网格缩放 `⌘+`/`⌘-`（菜单栏 View 命令），`⌘K` 打开 Find。
+快捷键（2026-06-12 最终，单字母无修饰、贴近系统照片操作条）：上一/下一张 `←`/`→`，播放暂停 `空格`，**收藏 `F`**，**查看信息 `I`**，**删除到系统照片 `D`（带确认）**，**废片篓（App 软删除，自定义）`T`**，关闭 `Esc`；网格缩放 `⌘+`/`⌘-`（菜单栏 View 命令），`⌘K` 打开 Find。（早期 P1 曾用 `.`/`⌘I`/`⌘⌫`，已统一为单键。）
 
 手势（2026-06-08 P1，作用于静态图）：捏合缩放 1×–6×、放大后拖拽平移、双击在适配与 2.5× 间切换、未放大时左右滑动切换上一/下一张；切换照片自动复位缩放，视频与播放中的 Live Photo 用方向键/按钮切换。网格捏合改变缩放级别（既有）。
 
@@ -1790,6 +1790,76 @@ P0 开发完成定义：
 - 10 万资产下列表浏览不卡顿。
 - 应用重启后分析进度可恢复。
 - 删除、恢复、收藏等操作与系统照片库状态一致。
+
+---
+
+## 8.5 P2 / P3 计划重排（2026-06-10 最终）
+
+> 背景：P0 / P1 完成度约 90%。原 §8 的 P2/P3 把「向量搜索」和「性能生产化」混在一起；现按**功能增量**重排为本节最终计划。**与上文 §8 的 P2/P3 概要冲突处，以本节为准。**
+> 关联：向量索引设计见 §3.6；外部模型媒体预处理见 §3.9；技术调研见 `doc/技术调研-macOS原生实现方案.md`。
+
+### P2：本机元数据增强 + 语义搜索
+
+建议按依赖顺序拆 3 个子阶段（先元数据、再向量、最后混合）：
+
+**P2-A 元数据增强（先做：Apple 原生、成本低，且是 P2-C 的前置依赖）**
+
+- **地名**：`CLGeocoder.reverseGeocodeLocation`，按 `appLanguage` 输出本地化地名（国家 / 省 / 市 / 区域），写入 `photo_locations`，查看器详情展示。
+  - 注意：CLGeocoder 有**限流**（约 50 次/分钟）。需「缓存 + 节流 + 懒加载」：首次查看该照片即解析并落库，后台对其余照片慢速回填；已解析的不再请求。
+- **照片类型**：photo / video / livePhoto / screenshot 已可由 `PHAsset.mediaType + mediaSubtypes` 得到；**RAW** 通过 `PHAssetResource` / `UTType`（`.rawImage`）识别。查看器详情展示类型。
+- **自动标签**：`VNClassifyImageRequest`（本机场景分类，无需外部模型）产出标签，按置信度阈值过滤后写 `photo_tags`（`source = vision`），查看器详情展示。
+
+**P2-B 向量与语义搜索**
+
+- 技术结论（已调研，2026-06）：文本↔图片语义检索需 CLIP 类模型；**两套方案都能在本机产出文本与图片向量，支持自然语言搜图**：
+  - **方案 A（Apple 默认）**：Apple **MobileCLIP / MobileCLIP2** 的 Core ML text/image encoder（Apple 官方发布、低延迟，适合作默认）。
+  - **方案 B（MLX 开源）**：MLX Swift + MobileCLIP2 / OpenCLIP（HuggingFace `mlx-community`）。
+  - 另：`VNGenerateImageFeaturePrintRequest` 作「相似照片 / 以图搜图」（仅图-图）。
+  - 重要：Apple **没有**现成的「文本→图片检索」API，必须自己用 CLIP encoder 产出向量 + sqlite-vec 召回。
+- 抽象 `EmbeddingProvider` + `VectorIndex(sqlite-vec)`（见 §3.6）；`embedding_spaces` 按 **模型 + 维度 + 模态** 隔离，新增 `last_used_at`。
+- **切换向量模型**：切换后若该空间无向量 → 起分析任务为每张照片生成向量；**旧空间向量保留**，**超过 30 天未使用（或未切回该模型）→ 清理该空间向量**。
+- 语义搜索：文本 query → text embedding → KNN 召回 + `SearchFilterState` 结构化过滤 + 距离/评分/时间 rerank。
+
+**P2-C 混合搜索（query understanding，最难、放最后）**
+
+- 解析自然语言查询里的 **标签 / 地名 / 时间 / 类型** → 自动转为结构化精确筛选；剩余「真实语义」部分再做向量召回；两者融合排序，提升准确率。
+- 建议分两步：① 规则 / 词典 + `NLTagger` / `NSDataDetector` 抽取（地名匹配已落库地名集合、时间用日期识别、类型/标签用词典）；② 后续再引入小模型 / LLM 强化。
+
+P2 保留项（从原 P2）：sqlite-vec 加载降级策略、embedding 断点续跑、空间重建。原 P2 里的「10 万压测 / 增量同步 / Core Spotlight / 报告 / 时间线」→ 归入 P3 生产化（其中滚动/预热/触底等性能项近期已部分完成）。
+
+### P3：相册体系 + AI 任务体系 + 智能相册 + 生产化
+
+- **P3-0 相册 / 旅程 / 回忆**：
+  - 相册：`PHAssetCollection`（用户相册、智能相册）可经 PhotoKit 接入，支持相册内筛选 / 搜索。
+  - **旅程(Trips) / 回忆(Memories)：公共 PhotoKit API 不暴露，无法直接读取** → 不直接接入；改为 P3 用自有逻辑（时间 + 地点聚类）**自建**「回忆 / 旅程」。
+- **P3-1 AI 分析任务体系 + MLX**：设计可扩展任务体系（`AIAnalysisProvider` 策略模式），接入 MLX 开源模型跑多种照片 AI 任务（描述、质量维度、主体/场景、独特性等），沿用 `analysis_runs / tasks / outputs` 版本化。
+- **P3-2 综合评分**：多任务输出 → 加权 / 模型综合评分，写 `photo_scores.overall_score`，查看器与角标可切换展示。
+- **P3-3（待澄清）**：原计划第 3 条「接入或开发。」内容不完整，需补充具体目标后再排期。
+- **P3-4 智能相册**：把语义搜索保存为「智能相册」；每次启动按语义**动态重算**成员；复用 P2 的语义 + 结构化查询管线。
+- **P3-X 生产化（从原 P2/P3 并入）**：大库压测、照片库增量同步、Core Spotlight 索引、错误处理 / 权限引导、打包签名公证。
+
+### 评估与优先级建议（摘要）
+
+1. **P2 内部顺序建议 P2-A → P2-B → P2-C**：地名 / 类型 / 标签既是 Apple 原生低成本快赢，又是混合搜索（P2-C）的前置依赖，应先做。
+2. **「两套向量方案」成立且都支持文本语义**（MobileCLIP Core ML / MLX）；切勿等待不存在的 Apple text→image 检索 API。
+3. **CLGeocoder 限流是真实风险** → 缓存 + 节流 + 懒加载，避免大库一次性反查被限。
+4. **旅程 / 回忆无公共 API** → P3 改为自建，而非读系统的。
+5. **P2-C 价值高但最难** → 先规则版、后模型版，分两步落地。
+6. **P3-3 含义待澄清**，确认后再排。
+
+### 8.6 P2 实现最终态（2026-06-12，已开发 / 待 Mac 编译验证）
+
+相对 §8.5 计划，P2-A / P2-B 的**实际落地态**与若干偏差如下（以本节为准）：
+
+- **地名（API 变更）**：实现改用 **`MKReverseGeocodingRequest`（macOS 26+）**，而非 §8.5 / §3.x 所写的 `CLGeocoder`（后者已废弃）。直接消费 `MKMapItem` / `MKAddressRepresentations`，避开已废弃的 `MKPlacemark`/`CLPlacemark`；跨 actor 字段先转 Sendable 值类型再传出（Swift 6 严格并发）。仍保留缓存 + 节流 + 懒加载应对限流。
+- **分析结果本地化**：`TaskCenter.localeIdentifier` 默认跟随系统、随应用语言切换更新，地名按当前 `locale` 本地化输出；EXIF 日期解析的 `en_US_POSIX` 为固定格式必需，保留。
+- **向量后端**：默认 **Apple 图像特征向量**（`VNGenerateImageFeaturePrintRequest`，相似照片 / 以图搜图，立即可用）；存储用 **sqlite-vec**（每模型一张定维 `vec0` 表 + KNN），运行时探测、无扩展自动降级暴力 KNN。MobileCLIP（文字↔图片）仍为后置槽位。
+- **自定义 MLX 模型**：已实现**导入本地 MLX 模型目录**（导入前校验 `config.json` + 权重文件、读取维度）→ 持久化安全作用域书签 → 注册 / 切换 / 重建索引；推理经 `MLXEmbeddingRuntime` seam，Mac 上接 `mlx-swift` + JINA V5 后可用文字语义搜索。
+- **向量数据生命周期**：`clearSpace`（清空模型向量 + drop `vec0` 表 + 删空间记录）、重建索引、删除自定义模型（清向量 + 注销 + 切回默认）、后台清理 30 天未用空间。
+- **多任务体系**：五类任务（美学评分 / 自动标签 / 地理位置 / 类型分析 / 向量索引）整数完成度（0–100%）、开机自启、最多并发 2、取批 / 处理后台执行不卡 UI；修复了**任务停止**与**完成度计数**（去重 + 无新增即收尾，避免死循环 / 超额）。
+- **视频取帧**：`AVAssetImageGenerator` 改用异步 `image(at:)`，替代已弃用的 `copyCGImage(at:actualTime:)`。
+
+> P2-C 混合搜索（query understanding）仍未实现，按 §8.5 规划保留。详细验收项见 `doc/待验证与修复清单.md` §10–§12。
 
 ---
 

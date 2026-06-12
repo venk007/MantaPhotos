@@ -20,6 +20,7 @@ public struct MantaPhotosApp: App {
                     appState.saveSettings()
                 }
                 .onChange(of: appState.navigation.appLanguage) {
+                    appState.tasks.localeIdentifier = appState.navigation.appLanguage.locale.identifier
                     appState.saveSettings()
                 }
                 .onChange(of: appState.navigation.gridLevel) {

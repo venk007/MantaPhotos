@@ -7,11 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1CDBF836A2E43E75880925F5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 78FAE064E08CAFDBD6457EA9 /* Assets.xcassets */; };
 		9A36FC32BB274575459BC954 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB893FC67F9B5F333E677E5D /* main.swift */; };
 		9B853FF7CFED0ED4058BB832 /* MantaPhotosCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8FA27AD200098278407A3302 /* MantaPhotosCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		78FAE064E08CAFDBD6457EA9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8DBBC406B9966D14482394BC /* MantaPhotos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MantaPhotos; path = .; sourceTree = SOURCE_ROOT; };
 		AB893FC67F9B5F333E677E5D /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		F91D9536148D05F5B8DF1F2E /* MantaPhotosMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MantaPhotosMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -65,6 +67,7 @@
 		78E791A7DC91461937303A46 /* MantaPhotosMacApp */ = {
 			isa = PBXGroup;
 			children = (
+				78FAE064E08CAFDBD6457EA9 /* Assets.xcassets */,
 				AB893FC67F9B5F333E677E5D /* main.swift */,
 			);
 			path = MantaPhotosMacApp;
@@ -78,6 +81,7 @@
 			buildConfigurationList = EEC08F206E8753CC5576EE8E /* Build configuration list for PBXNativeTarget "MantaPhotosMac" */;
 			buildPhases = (
 				6B48CE322EE3AC83289B0C2C /* Sources */,
+				95FF03983F5B301E7765427C /* Resources */,
 				A554BB06448C8FE0229F126B /* Frameworks */,
 			);
 			buildRules = (
@@ -127,6 +131,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		95FF03983F5B301E7765427C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1CDBF836A2E43E75880925F5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		6B48CE322EE3AC83289B0C2C /* Sources */ = {

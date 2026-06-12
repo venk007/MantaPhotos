@@ -19,8 +19,9 @@ struct AppSettingsRepository: Sendable {
             return AppSettingsSnapshot(
                 themeMode: ThemeMode(rawValue: values["appearance.theme"] ?? "") ?? .system,
                 appLanguage: AppLanguage(rawValue: values["appearance.language"] ?? "") ?? .system,
-                gridLevel: GridLevel(rawValue: Int(values["photos.gridLevel"] ?? "") ?? GridLevel.columns4.rawValue) ?? .columns4,
-                badgeMetric: BadgeMetric(rawValue: values["photos.badgeMetric"] ?? "") ?? .aesthetic
+                gridLevel: GridLevel(rawValue: Int(values["photos.gridLevel"] ?? "") ?? GridLevel.default.rawValue) ?? .default,
+                badgeMetric: BadgeMetric(rawValue: values["photos.badgeMetric"] ?? "") ?? .aesthetic,
+                vectorModelKey: values["analysis.vectorModel"] ?? EmbeddingProviderRegistry.defaultKey
             )
         }
     }
@@ -32,7 +33,8 @@ struct AppSettingsRepository: Sendable {
                 ("appearance.theme", snapshot.themeMode.rawValue),
                 ("appearance.language", snapshot.appLanguage.rawValue),
                 ("photos.gridLevel", "\(snapshot.gridLevel.rawValue)"),
-                ("photos.badgeMetric", snapshot.badgeMetric.rawValue)
+                ("photos.badgeMetric", snapshot.badgeMetric.rawValue),
+                ("analysis.vectorModel", snapshot.vectorModelKey)
             ]
 
             for (key, value) in values {
@@ -52,9 +54,45 @@ struct AppSettingsRepository: Sendable {
     }
 }
 
+extension AppSettingsRepository {
+    private static let customModelKey = "analysis.customModel"
+
+    func loadCustomVectorModel() throws -> CustomVectorModelConfig? {
+        try databaseQueue.read { database in
+            guard let json = try String.fetchOne(
+                database,
+                sql: "select value from app_settings where key = ?;",
+                arguments: [Self.customModelKey]
+            ), let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(CustomVectorModelConfig.self, from: data)
+        }
+    }
+
+    func saveCustomVectorModel(_ config: CustomVectorModelConfig?) throws {
+        let now = DateCoding.string(from: Date()) ?? ""
+        try databaseQueue.write { database in
+            guard let config,
+                  let data = try? JSONEncoder().encode(config),
+                  let json = String(data: data, encoding: .utf8) else {
+                try database.execute(sql: "delete from app_settings where key = ?;", arguments: [Self.customModelKey])
+                return
+            }
+            try database.execute(
+                sql:
+                    """
+                    insert into app_settings(key, value, updated_at) values (?, ?, ?)
+                    on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at;
+                    """,
+                arguments: [Self.customModelKey, json, now]
+            )
+        }
+    }
+}
+
 struct AppSettingsSnapshot: Equatable, Sendable {
     var themeMode: ThemeMode
     var appLanguage: AppLanguage
     var gridLevel: GridLevel
     var badgeMetric: BadgeMetric
+    var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
 }

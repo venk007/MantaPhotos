@@ -101,6 +101,34 @@ public struct SearchRepository: Sendable {
         }
     }
 
+    /// 按 id 取结果并保持给定顺序（用于相似照片 / 向量检索结果）。
+    public func results(forIDs ids: [String]) throws -> [PhotoSearchResult] {
+        guard !ids.isEmpty else { return [] }
+        return try databaseQueue.read { database in
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+            let rows = try Row.fetchAll(
+                database,
+                sql:
+                    """
+                    select
+                      photo_assets.*,
+                      photo_scores.aesthetic_score as score_aesthetic,
+                      null as score_overall
+                    from photo_assets
+                    left join photo_scores on photo_scores.photo_id = photo_assets.id
+                    where photo_assets.id in (\(placeholders))
+                      and photo_assets.system_deleted_at is null;
+                    """,
+                arguments: StatementArguments(ids)
+            )
+            let byID = Dictionary(
+                rows.map(Self.mapSearchResult(row:)).map { ($0.id, $0) },
+                uniquingKeysWith: { lhs, _ in lhs }
+            )
+            return ids.compactMap { byID[$0] }
+        }
+    }
+
     public func count(filter: SearchFilterState) throws -> Int {
         try databaseQueue.read { database in
             let selection = filter.makeSQLSelection()

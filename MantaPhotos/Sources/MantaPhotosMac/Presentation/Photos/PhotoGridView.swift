@@ -2,6 +2,15 @@ import AppKit
 import Photos
 import SwiftUI
 
+/// 年/月滚动导航的一个分组：某个月在结果中第一张照片的位置。
+struct GridDateSection: Identifiable, Equatable, Sendable {
+    var id: String          // "yyyy-MM"
+    var date: Date          // 该月起始（用于展示与排序）
+    var firstIndex: Int     // 该月第一张照片在结果数组里的下标
+    var year: Int
+    var month: Int
+}
+
 struct PhotoGridView: NSViewControllerRepresentable {
     var items: [PhotoSearchResult]
     var gridLevel: GridLevel
@@ -12,21 +21,20 @@ struct PhotoGridView: NSViewControllerRepresentable {
     var onLoadMore: () -> Void
     var onZoomStep: (Int) -> Void
     var onSelect: (PhotoSearchResult) -> Void
+    var onSectionsChange: ([GridDateSection]) -> Void = { _ in }
+    var onVisibleDateChange: (Date?) -> Void = { _ in }
+    /// 由滚动导航请求跳转到的下标；处理后通过 onScrollHandled 复位。
+    var scrollToIndex: Int?
+    var onScrollHandled: () -> Void = {}
 
     func makeNSViewController(context: Context) -> PhotoGridViewController {
         let controller = PhotoGridViewController()
-        controller.onSelect = onSelect
-        controller.onSidebarExpandedChange = onSidebarExpandedChange
-        controller.onLoadMore = onLoadMore
-        controller.onZoomStep = onZoomStep
+        applyCallbacks(to: controller)
         return controller
     }
 
     func updateNSViewController(_ controller: PhotoGridViewController, context: Context) {
-        controller.onSelect = onSelect
-        controller.onSidebarExpandedChange = onSidebarExpandedChange
-        controller.onLoadMore = onLoadMore
-        controller.onZoomStep = onZoomStep
+        applyCallbacks(to: controller)
         controller.configure(
             items: items,
             gridLevel: gridLevel,
@@ -34,6 +42,20 @@ struct PhotoGridView: NSViewControllerRepresentable {
             selectedIDs: selectedIDs,
             sidebarExpanded: sidebarExpanded
         )
+        if let scrollToIndex {
+            controller.scrollToItem(index: scrollToIndex)
+            let handler = onScrollHandled
+            DispatchQueue.main.async { handler() }
+        }
+    }
+
+    private func applyCallbacks(to controller: PhotoGridViewController) {
+        controller.onSelect = onSelect
+        controller.onSidebarExpandedChange = onSidebarExpandedChange
+        controller.onLoadMore = onLoadMore
+        controller.onZoomStep = onZoomStep
+        controller.onSectionsChange = onSectionsChange
+        controller.onVisibleDateChange = onVisibleDateChange
     }
 }
 
@@ -44,7 +66,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
     private var dataSource: NSCollectionViewDiffableDataSource<Int, String>?
     private var items: [PhotoSearchResult] = []
     private var itemByID: [String: PhotoSearchResult] = [:]
-    private var gridLevel: GridLevel = .columns4
+    private var gridLevel: GridLevel = .default
     private var badgeMetric: BadgeMetric = .aesthetic
     private var selectedIDs: Set<String> = []
     private var sidebarExpanded = true
@@ -54,15 +76,18 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
     private var sidebarHiddenByScroll = false
     private var sidebarWasExpandedBeforeScroll = false
     private var scrollRestoreWorkItem: DispatchWorkItem?
-    private var magnificationAccumulator: CGFloat = 0
+    private var didZoomStepThisGesture = false
     private var didRequestLoadMoreAtCount = 0
     // 预热节流：记录上次重算预热时的滚动位置，并合并同一 runloop 内的多次滚动通知。
     private var lastPreheatOffsetY: CGFloat = .greatestFiniteMagnitude
     private var pendingPreheat = false
+    private var lastReportedVisibleIndex = -1
     var onSelect: ((PhotoSearchResult) -> Void)?
     var onSidebarExpandedChange: ((Bool) -> Void)?
     var onLoadMore: (() -> Void)?
     var onZoomStep: ((Int) -> Void)?
+    var onSectionsChange: (([GridDateSection]) -> Void)?
+    var onVisibleDateChange: ((Date?) -> Void)?
 
     deinit {
         NotificationCenter.default.removeObserver(self)
@@ -74,10 +99,10 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
     override func loadView() {
         view = NSView()
 
-        flowLayout.minimumInteritemSpacing = 16
-        flowLayout.minimumLineSpacing = 16
+        flowLayout.minimumInteritemSpacing = 2
+        flowLayout.minimumLineSpacing = 2
         // 底部预留出悬浮液态玻璃导航坞 + 状态条的空间，避免最后一行被遮挡。
-        flowLayout.sectionInset = NSEdgeInsets(top: 16, left: 20, bottom: 96, right: 20)
+        flowLayout.sectionInset = NSEdgeInsets(top: 8, left: 12, bottom: 96, right: 12)
 
         collectionView.collectionViewLayout = flowLayout
         collectionView.delegate = self
@@ -143,6 +168,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         updateItemSize()
         if needsSnapshot {
             applySnapshot(animatingDifferences: false)
+            recomputeDateSections()
         } else if needsVisibleRefresh {
             refreshVisibleItems()
             updateThumbnailPreheating()
@@ -183,6 +209,11 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         return CGSize(width: side, height: side)
     }
 
+    /// 列数 ≥ 15 时强制不显示分数角标（密度优先）。
+    private var effectiveBadgeMetric: BadgeMetric {
+        gridLevel.columnCount >= 15 ? .hidden : badgeMetric
+    }
+
     private func makeDataSource() -> NSCollectionViewDiffableDataSource<Int, String> {
         NSCollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] collectionView, indexPath, id in
             let item = collectionView.makeItem(
@@ -198,7 +229,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
 
             gridItem.configure(
                 result: result,
-                badgeMetric: self.badgeMetric,
+                badgeMetric: self.effectiveBadgeMetric,
                 selected: self.selectedIDs.contains(result.id),
                 targetSize: self.thumbnailTargetSize()
             )
@@ -226,7 +257,7 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
             let result = items[indexPath.item]
             gridItem.configure(
                 result: result,
-                badgeMetric: badgeMetric,
+                badgeMetric: effectiveBadgeMetric,
                 selected: selectedIDs.contains(result.id),
                 targetSize: thumbnailTargetSize()
             )
@@ -238,6 +269,47 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         updateSidebarForScroll()
         updateLoadMoreTrigger()
         schedulePreheatUpdate()
+        reportVisibleDate()
+    }
+
+    // MARK: - 年/月滚动导航
+
+    private func recomputeDateSections() {
+        var sections: [GridDateSection] = []
+        var seen = Set<String>()
+        let calendar = Calendar.current
+        for (index, item) in items.enumerated() {
+            guard let date = item.asset.creationDate else { continue }
+            let comps = calendar.dateComponents([.year, .month], from: date)
+            guard let year = comps.year, let month = comps.month else { continue }
+            let key = "\(year)-\(month)"
+            if seen.insert(key).inserted {
+                let monthStart = calendar.date(from: DateComponents(year: year, month: month)) ?? date
+                sections.append(
+                    GridDateSection(id: key, date: monthStart, firstIndex: index, year: year, month: month)
+                )
+            }
+        }
+        onSectionsChange?(sections)
+    }
+
+    private func reportVisibleDate() {
+        guard !items.isEmpty else { return }
+        let topIndex = collectionView.indexPathsForVisibleItems()
+            .map(\.item)
+            .filter { items.indices.contains($0) }
+            .min() ?? 0
+        guard topIndex != lastReportedVisibleIndex else { return }
+        lastReportedVisibleIndex = topIndex
+        onVisibleDateChange?(items[topIndex].asset.creationDate)
+    }
+
+    func scrollToItem(index: Int) {
+        guard items.indices.contains(index) else { return }
+        collectionView.scrollToItems(
+            at: [IndexPath(item: index, section: 0)],
+            scrollPosition: .top
+        )
     }
 
     /// 滚动时的预热调度：滚动距离不足半行不重算，且把同一 runloop 内的多次通知合并为一次，
@@ -257,15 +329,24 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
 
     @objc
     private func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
-        magnificationAccumulator += recognizer.magnification
-        guard abs(magnificationAccumulator) >= 0.18 else { return }
-
-        if magnificationAccumulator > 0 {
-            onZoomStep?(-1)
-        } else {
-            onZoomStep?(1)
+        // 每个捏合手势只调一个档位：手势开始重置，跨过阈值后调一次并锁定，手势结束再解锁。
+        // `recognizer.magnification` 是自手势开始以来的累计值。
+        switch recognizer.state {
+        case .began:
+            didZoomStepThisGesture = false
+        case .changed:
+            guard !didZoomStepThisGesture else { return }
+            let magnification = recognizer.magnification
+            if magnification >= 0.25 {
+                didZoomStepThisGesture = true
+                onZoomStep?(-1) // 张开 = 放大 = 更少列
+            } else if magnification <= -0.25 {
+                didZoomStepThisGesture = true
+                onZoomStep?(1)  // 捏合 = 缩小 = 更多列
+            }
+        default:
+            didZoomStepThisGesture = false
         }
-        magnificationAccumulator = 0
     }
 
     private func updateThumbnailPreheating() {
@@ -397,7 +478,7 @@ final class PhotoGridItem: NSCollectionViewItem {
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        view.layer?.cornerRadius = 12
+        view.layer?.cornerRadius = 0
         view.layer?.masksToBounds = true
         view.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.18).cgColor
 
@@ -427,7 +508,7 @@ final class PhotoGridItem: NSCollectionViewItem {
 
         selectionRing.borderWidth = 0
         selectionRing.borderColor = NSColor.controlAccentColor.cgColor
-        selectionRing.cornerRadius = 12
+        selectionRing.cornerRadius = 0
 
         view.addSubview(thumbnailView)
         view.addSubview(scoreLabel)

@@ -48,11 +48,6 @@ final class LocalThumbnailProvider: @unchecked Sendable {
     static let shared = LocalThumbnailProvider()
 
     private let cache = NSCache<NSString, NSImage>()
-    private let queue = DispatchQueue(
-        label: "manta.local.thumbnail",
-        qos: .userInitiated,
-        attributes: .concurrent
-    )
 
     private init() {
         cache.countLimit = 1_000
@@ -72,21 +67,24 @@ final class LocalThumbnailProvider: @unchecked Sendable {
         }
 
         let box = CancellationBox()
-        queue.async { [weak self] in
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
             if box.isCancelled { return }
-            let image = Self.makeThumbnail(url: fileURL, maxPixel: maxPixel)
+            let image = await Self.makeThumbnail(url: fileURL, maxPixel: maxPixel)
             if let image {
                 self?.cache.setObject(image, forKey: keyString as NSString)
             }
             if box.isCancelled { return }
-            Task { @MainActor in completion(image) }
+            await MainActor.run { completion(image) }
         }
-        return ThumbnailRequestToken { box.cancel() }
+        return ThumbnailRequestToken {
+            box.cancel()
+            task.cancel()
+        }
     }
 
-    static func makeThumbnail(url: URL, maxPixel: CGFloat) -> NSImage? {
+    static func makeThumbnail(url: URL, maxPixel: CGFloat) async -> NSImage? {
         if LocalMediaType.isVideo(url) {
-            return videoPosterFrame(url: url, maxPixel: maxPixel)
+            return await videoPosterFrame(url: url, maxPixel: maxPixel)
         }
         return imageThumbnail(url: url, maxPixel: maxPixel)
     }
@@ -105,14 +103,14 @@ final class LocalThumbnailProvider: @unchecked Sendable {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
-    static func videoPosterFrame(url: URL, maxPixel: CGFloat) -> NSImage? {
+    static func videoPosterFrame(url: URL, maxPixel: CGFloat) async -> NSImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
         let time = CMTime(value: 1, timescale: 2) // 约 0.5s，避开纯黑首帧
-        // 同步取帧 API 在新系统标记为弃用，但仍可用；缩略图在后台队列调用，影响可控。
-        guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
+        // 用 macOS 13+ 的异步 `image(at:)` 取帧，替代已弃用 / 在新 SDK 移除的 `copyCGImage(at:actualTime:)`。
+        guard let cgImage = try? await generator.image(at: time).image else {
             return nil
         }
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
@@ -122,9 +120,9 @@ final class LocalThumbnailProvider: @unchecked Sendable {
 /// 本地媒体取数（用于评分与查看器）。Sendable，可在评分 actor / 后台调用。
 struct LocalMediaProvider: Sendable {
     /// 给评分用的图像数据：图片直接读文件；视频取一帧编码为 JPEG。
-    func imageData(fileURL: URL) throws -> Data {
+    func imageData(fileURL: URL) async throws -> Data {
         if LocalMediaType.isVideo(fileURL) {
-            guard let frame = LocalThumbnailProvider.videoPosterFrame(url: fileURL, maxPixel: 2048),
+            guard let frame = await LocalThumbnailProvider.videoPosterFrame(url: fileURL, maxPixel: 2048),
                   let data = Self.jpegData(from: frame) else {
                 throw PhotoSourceError.thumbnailGenerationFailed(fileURL.lastPathComponent)
             }

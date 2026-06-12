@@ -12,10 +12,12 @@ final class NavigationState {
     var route: AppRoute = .photos
     var themeMode: ThemeMode = .system
     var appLanguage: AppLanguage = .system
-    var gridLevel: GridLevel = .columns4
+    var gridLevel: GridLevel = .default
     var badgeMetric: BadgeMetric = .aesthetic
     var isFindOverlayPresented = false
     var isSidebarExpanded = true
+    /// 当前选用的向量模型 key（语义/相似搜索与向量索引任务用）。
+    var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
 
     func adjustGridLevel(step: Int) {
         let levels = GridLevel.allCases

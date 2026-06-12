@@ -195,6 +195,28 @@ struct PhotoLibraryAdapter {
         }
     }
 
+    func deleteAssets(localIdentifiers: [String]) async throws {
+        guard !localIdentifiers.isEmpty else { return }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+        guard result.count > 0 else { return }
+        var assets: [PHAsset] = []
+        result.enumerateObjects { asset, _, _ in assets.append(asset) }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.deleteAssets(assets as NSArray)
+            } completionHandler: { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: PhotoLibraryAdapterError.photoLibraryChangeFailed)
+                }
+            }
+        }
+    }
+
     private static func fetchOptions(limit: Int?) -> PHFetchOptions {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]

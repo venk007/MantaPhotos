@@ -15,6 +15,8 @@ final class PhotoLibraryViewModel {
     private(set) var matchedPhotoCount = 0
     private(set) var isRefreshingPhotos = false
     private(set) var isLoadingMorePhotos = false
+    /// 相似照片（语义）结果模式：true 时照片墙展示的是向量检索结果。
+    private(set) var isSimilarMode = false
     var importProgress = PhotoImportProgress.idle
     private(set) var lastErrorMessage: String?
 
@@ -213,6 +215,7 @@ final class PhotoLibraryViewModel {
 
     func refreshPhotos(limit: Int? = nil) async {
         guard let databaseQueue else { return }
+        isSimilarMode = false
         let filter = searchFilter
         let limit = limit ?? photoPageSize
         isRefreshingPhotos = true
@@ -275,6 +278,142 @@ final class PhotoLibraryViewModel {
         selectedPhotoID = result.id
         selectedPhotoForViewer = result
         isViewerPresented = true
+    }
+
+    // MARK: - P2：详情与语义（相似照片）
+
+    /// 查看器详情：地名 / 标签 / 是否 RAW（后台读取）。
+    func loadExtraDetail(photoID: String) async -> PhotoExtraDetail {
+        guard let databaseQueue else { return .empty }
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        return await Task.detached(priority: .userInitiated) {
+            let place = (try? repository.fetchPlace(photoID: photoID)) ?? nil
+            let tags = (try? repository.fetchTagNames(photoID: photoID)) ?? []
+            let isRaw = (try? repository.isRaw(photoID: photoID)) ?? false
+            return PhotoExtraDetail(place: place, tags: tags, isRaw: isRaw)
+        }.value
+    }
+
+    /// 以指定照片为查询做向量相似检索，结果替换照片墙（语义搜索：以图搜图）。
+    func searchSimilar(to result: PhotoSearchResult, spaceKey: String) {
+        guard let databaseQueue else { return }
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        let search = SearchRepository(databaseQueue: databaseQueue)
+        let queryID = result.id
+        closeViewer()
+        Task {
+            do {
+                let query = try await Task.detached(priority: .userInitiated) {
+                    try repository.embedding(photoID: queryID, spaceKey: spaceKey)
+                }.value
+                guard let query else {
+                    lastErrorMessage = "该照片尚未生成向量，请等待向量索引完成后再试。"
+                    return
+                }
+                let matches = try await Task.detached(priority: .userInitiated) {
+                    try repository.nearest(to: query, spaceKey: spaceKey, limit: 200, excluding: queryID)
+                }.value
+                let ids = matches.map(\.photoID)
+                let results = try await Task.detached(priority: .userInitiated) {
+                    try search.results(forIDs: ids)
+                }.value
+                photoResults = results
+                matchedPhotoCount = results.count
+                isSimilarMode = true
+            } catch {
+                lastErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 文字语义搜索（需当前向量模型支持文字查询，如 JINA V5）。结果按相似度排序替换照片墙。
+    func semanticSearch(query: String, spaceKey: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let databaseQueue else { return }
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        let search = SearchRepository(databaseQueue: databaseQueue)
+        let provider = EmbeddingProviderRegistry.provider(forKey: spaceKey)
+        Task {
+            do {
+                let vector = try await provider.textEmbedding(query: trimmed)
+                let matches = try await Task.detached(priority: .userInitiated) {
+                    try repository.nearest(to: vector, spaceKey: spaceKey, limit: 300, excluding: nil)
+                }.value
+                let results = try await Task.detached(priority: .userInitiated) {
+                    try search.results(forIDs: matches.map(\.photoID))
+                }.value
+                photoResults = results
+                matchedPhotoCount = results.count
+                isSimilarMode = true
+            } catch {
+                lastErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 退出相似照片模式，恢复正常筛选结果。
+    func exitSimilarMode() {
+        Task { await refreshPhotos() }
+    }
+
+    // MARK: - 废片篓批量
+
+    /// 全部恢复：把废片篓里的照片移出废片篓。
+    func restoreAllTrashed() {
+        guard let databaseQueue else { return }
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try PhotoAssetRepository(databaseQueue: databaseQueue).restoreAllTrashed()
+                }.value
+                await refreshPhotos()
+            } catch {
+                lastErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 清空废片篓：系统源走 PhotoKit 批量删除、本地源进系统废纸篓，并标记已删除。
+    func emptyTrash() {
+        guard let databaseQueue else { return }
+        Task {
+            do {
+                let locators = try await Task.detached(priority: .userInitiated) {
+                    try PhotoAssetRepository(databaseQueue: databaseQueue).trashedLocators()
+                }.value
+                guard !locators.isEmpty else { return }
+
+                let systemIDs = locators
+                    .filter { $0.sourceID == PhotoAsset.systemPhotosSourceID }
+                    .map(\.localIdentifier)
+                if !systemIDs.isEmpty {
+                    try await PhotoLibraryAdapter().deleteAssets(localIdentifiers: systemIDs)
+                }
+                for locator in locators where locator.sourceID != PhotoAsset.systemPhotosSourceID {
+                    if let url = PhotoSourceRegistry.shared.fileURL(
+                        forSourceID: locator.sourceID,
+                        relativePath: locator.relativePath ?? locator.localIdentifier
+                    ) {
+                        try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                    }
+                }
+                try await Task.detached(priority: .userInitiated) {
+                    try PhotoAssetRepository(databaseQueue: databaseQueue).markSystemDeleted(photoIDs: locators.map(\.id))
+                }.value
+                await refreshPhotos()
+            } catch {
+                lastErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 高频标签（供 Find 标签筛选展示）。
+    func topTags() async -> [PhotoTagOption] {
+        guard let databaseQueue else { return [] }
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        return (try? await Task.detached(priority: .userInitiated) {
+            try repository.topTags(limit: 40)
+        }.value) ?? []
     }
 
     func closeViewer() {
@@ -382,4 +521,13 @@ final class PhotoLibraryViewModel {
         selectedPhotoForViewer = photoResults[nextIndex]
         selectedPhotoID = photoResults[nextIndex].id
     }
+}
+
+/// 查看器额外详情（P2：地名 / 标签 / RAW）。
+public struct PhotoExtraDetail: Sendable, Equatable {
+    public var place: PhotoPlace?
+    public var tags: [String]
+    public var isRaw: Bool
+
+    public static let empty = PhotoExtraDetail(place: nil, tags: [], isRaw: false)
 }

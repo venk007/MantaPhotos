@@ -3,11 +3,63 @@ import SwiftUI
 struct PhotosPageView: View {
     @Environment(AppState.self) private var appState
 
+    // 年/月滚动导航状态
+    @State private var dateSections: [GridDateSection] = []
+    @State private var currentVisibleDate: Date?
+    @State private var scrubberActive = false
+    @State private var scrollToIndex: Int?
+    @State private var scrubberHideTask: Task<Void, Never>?
+    @State private var showEmptyTrashConfirm = false
+
+    private var trashActionBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "trash")
+                .foregroundStyle(.secondary)
+            Text("废片篓")
+                .font(.callout.weight(.medium))
+            Spacer()
+            Button {
+                appState.library.restoreAllTrashed()
+            } label: {
+                Label("全部恢复", systemImage: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            Button(role: .destructive) {
+                showEmptyTrashConfirm = true
+            } label: {
+                Label("清空（永久删除）", systemImage: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+    }
+
     var body: some View {
         @Bindable var library = appState.library
         VStack(spacing: 0) {
             PhotosToolbarView()
-            if !appState.library.searchFilter.isEmpty {
+            if appState.library.searchFilter.inTrash == true {
+                trashActionBar
+            } else if appState.library.isSimilarMode {
+                HStack(spacing: 10) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
+                        .foregroundStyle(.secondary)
+                    Text("相似照片结果")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Button {
+                        appState.library.exitSimilarMode()
+                    } label: {
+                        Label("清除", systemImage: "xmark")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+                .padding(.vertical, 8)
+                .background(.regularMaterial)
+            } else if !appState.library.searchFilter.isEmpty {
                 FindAppliedBannerView()
             }
             Divider()
@@ -32,8 +84,28 @@ struct PhotosPageView: View {
                         },
                         onSelect: { result in
                             appState.library.openViewer(for: result)
-                        }
+                        },
+                        onSectionsChange: { dateSections = $0 },
+                        onVisibleDateChange: { date in
+                            currentVisibleDate = date
+                            markScrubberActive()
+                        },
+                        scrollToIndex: scrollToIndex,
+                        onScrollHandled: { scrollToIndex = nil }
                     )
+                    .overlay(alignment: .trailing) {
+                        if !dateSections.isEmpty {
+                            PhotoScrubberView(
+                                sections: dateSections,
+                                currentDate: currentVisibleDate,
+                                isActive: scrubberActive,
+                                onScrub: { index in
+                                    scrollToIndex = index
+                                    markScrubberActive()
+                                }
+                            )
+                        }
+                    }
                 }
 
                 if appState.library.isRefreshingPhotos {
@@ -76,6 +148,121 @@ struct PhotosPageView: View {
                     .environment(appState)
             }
         }
+        .confirmationDialog(
+            "清空废片篓？系统照片将永久删除，本地文件移入系统废纸篓。",
+            isPresented: $showEmptyTrashConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("清空", role: .destructive) {
+                appState.library.emptyTrash()
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
+    /// 标记滚动导航为活跃，并在停顿后自动淡出。
+    private func markScrubberActive() {
+        scrubberActive = true
+        scrubberHideTask?.cancel()
+        scrubberHideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.4))
+            scrubberActive = false
+        }
+    }
+}
+
+/// 右侧年/月滚动导航（参考 Google Photos）：滚动时淡入，显示当前年月；
+/// 点击年份或上下拖拽可快速跳转到对应年/月第一张照片。
+struct PhotoScrubberView: View {
+    @Environment(AppState.self) private var appState
+    let sections: [GridDateSection]
+    let currentDate: Date?
+    let isActive: Bool
+    var onScrub: (Int) -> Void
+
+    @State private var isDragging = false
+    @State private var dragY: CGFloat = 0
+    @State private var lastScrubbedIndex = -1
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topTrailing) {
+                yearRail
+                pill(in: geo)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            .contentShape(Rectangle())
+            .gesture(dragGesture(in: geo))
+        }
+        .frame(width: 48)
+        .padding(.trailing, 2)
+        .opacity(isActive || isDragging ? 1 : 0)
+        .animation(.easeInOut(duration: 0.25), value: isActive)
+        .animation(.easeInOut(duration: 0.12), value: isDragging)
+    }
+
+    private var yearRail: some View {
+        VStack(spacing: 0) {
+            ForEach(yearMarkers, id: \.year) { marker in
+                Text(verbatim: String(marker.year))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onScrub(marker.firstIndex) }
+            }
+        }
+        .frame(width: 40)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func pill(in geo: GeometryProxy) -> some View {
+        if isDragging, let date = currentDate ?? sections.first?.date {
+            Text(monthLabel(date))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .glassEffect(.regular, in: Capsule())
+                .fixedSize()
+                .offset(x: -56, y: min(max(0, dragY - 16), max(0, geo.size.height - 32)))
+        }
+    }
+
+    private func dragGesture(in geo: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                isDragging = true
+                dragY = value.location.y
+                guard !sections.isEmpty, geo.size.height > 0 else { return }
+                let fraction = min(1, max(0, value.location.y / geo.size.height))
+                let rawIndex = Int((fraction * CGFloat(sections.count - 1)).rounded())
+                let section = sections[min(max(0, rawIndex), sections.count - 1)]
+                if section.firstIndex != lastScrubbedIndex {
+                    lastScrubbedIndex = section.firstIndex
+                    onScrub(section.firstIndex)
+                }
+            }
+            .onEnded { _ in
+                isDragging = false
+                lastScrubbedIndex = -1
+            }
+    }
+
+    /// 每个年份取首个分组（用于年份刻度与点击跳转）。
+    private var yearMarkers: [GridDateSection] {
+        var seen = Set<Int>()
+        return sections.filter { seen.insert($0.year).inserted }
+    }
+
+    private func monthLabel(_ date: Date) -> String {
+        let isZH = appState.navigation.appLanguage == .zhHans
+            || (appState.navigation.appLanguage == .system
+                && Locale.preferredLanguages.first?.hasPrefix("zh") == true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = isZH ? "yyyy年M月" : "MMM yyyy"
+        return formatter.string(from: date)
     }
 }
 
@@ -284,6 +471,9 @@ struct ZoomControlView: View {
 struct BadgeSegmentView: View {
     @Environment(AppState.self) private var appState
 
+    /// 列数 ≥ 15 时强制不显示角标，此控件仅用于切换维度（呈隐藏态）。
+    private var badgeHidden: Bool { appState.navigation.gridLevel.columnCount >= 15 }
+
     var body: some View {
         HStack(spacing: 2) {
             segment(.aesthetic, icon: "camera.aperture")
@@ -291,11 +481,15 @@ struct BadgeSegmentView: View {
         }
         .padding(3)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+        .opacity(badgeHidden ? 0.55 : 1)
+        .help(badgeHidden ? "高密度下不显示分数角标，仅可切换维度" : "分数维度")
     }
 
     private func segment(_ metric: BadgeMetric, icon: String) -> some View {
-        Button {
-            appState.navigation.badgeMetric = appState.navigation.badgeMetric == metric ? .hidden : metric
+        let selected = appState.navigation.badgeMetric == metric
+        return Button {
+            // 高密度：仅切换维度、不开启展示；正常：点同一维度切换显隐。
+            appState.navigation.badgeMetric = badgeHidden ? metric : (selected ? .hidden : metric)
         } label: {
             Label(appState.localized(metric.localizationKey), systemImage: icon)
                 .labelStyle(.titleAndIcon)
@@ -303,16 +497,12 @@ struct BadgeSegmentView: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .foregroundStyle(appState.navigation.badgeMetric == metric ? .white : .secondary)
+        .foregroundStyle(selected ? (badgeHidden ? Color.secondary : Color.white) : Color.secondary)
         .background {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.clear)
-                .overlay {
-                    if appState.navigation.badgeMetric == metric {
-                        RoundedRectangle(cornerRadius: DesignSystem.Radius.control)
-                            .fill(DesignSystem.Glass.activeTint)
-                    }
-                }
+            if selected, !badgeHidden {
+                RoundedRectangle(cornerRadius: DesignSystem.Radius.control)
+                    .fill(DesignSystem.Glass.activeTint)
+            }
         }
     }
 }

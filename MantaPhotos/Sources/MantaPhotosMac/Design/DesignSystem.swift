@@ -28,15 +28,11 @@ enum DesignSystem {
 
     /// 液态玻璃专用令牌：描边、遮罩、强调态。
     ///
-    /// macOS 26 / 27 Liquid Glass 适配原则（material-first）：
-    /// 所有浮层 chrome 一律用系统 `Material`（`.regularMaterial` / `.ultraThinMaterial` 等），
-    /// 它会**自动跟随 macOS 27 的「半透明度」滑块**与浅/深色、系统强调色。
-    /// 这里只保留**会随外观自适应**的少量装饰令牌，不再放任何固定颜色的自绘 chrome
-    /// （固定白色描边、品牌渐变已移除）。未来若采用 `.glassEffect()`（macOS 26+），
-    /// 只需在这一处与各 `.background(.regularMaterial, in:)` 调用点本地替换即可。
+    /// material-first：浮层 chrome 一律用系统 `Material`，自动跟随 macOS 27「半透明度」
+    /// 滑块与浅/深色、系统强调色。这里只保留**随外观自适应**的少量装饰令牌，不放固定颜色的
+    /// 自绘 chrome。未来改用 `.glassEffect()`（macOS 26+）只需在此与各 `.background` 调用点替换。
     enum Glass {
-        /// 玻璃发丝描边：用 `primary` 透明度，浅/深色与不同玻璃浓淡下都自适应；
-        /// 不再用固定白色（固定白在浅色 / 低透明玻璃上会发灰发脏，且不跟随半透明度滑块）。
+        /// 发丝描边用 `primary` 透明度而非固定白：浅色 / 低透明玻璃上固定白会发灰，且不跟随半透明度滑块。
         static let hairline = Color.primary.opacity(0.12)
         static let hairlineWidth: CGFloat = 0.5
 

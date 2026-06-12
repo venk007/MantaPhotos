@@ -206,7 +206,7 @@ actor AnalysisScheduler {
                     ) else {
                         throw PhotoSourceError.fileNotFound(task.sourceAssetKey)
                     }
-                    data = try LocalMediaProvider().imageData(fileURL: url)
+                    data = try await LocalMediaProvider().imageData(fileURL: url)
                 }
                 try Task.checkCancellation()
                 result = try await provider.scoreImage(data: data, isScreenshot: false)

@@ -44,9 +44,112 @@ struct SettingsPageView: View {
                     Label("添加本地文件夹", systemImage: "folder.badge.plus")
                 }
             }
+
+            Section("向量模型") {
+                Picker("当前模型", selection: $navigation.vectorModelKey) {
+                    ForEach(EmbeddingProviderRegistry.allDescriptors) { descriptor in
+                        Text(descriptor.displayName).tag(descriptor.key)
+                    }
+                }
+                Button {
+                    importModelDirectory()
+                } label: {
+                    Label("导入本地模型目录…", systemImage: "tray.and.arrow.down")
+                }
+                Button {
+                    appState.rebuildVectorIndex()
+                } label: {
+                    Label("重建当前模型向量", systemImage: "arrow.triangle.2.circlepath")
+                }
+                if EmbeddingProviderRegistry.customDescriptor()?.key == navigation.vectorModelKey {
+                    Button(role: .destructive) {
+                        appState.removeCustomVectorModel()
+                    } label: {
+                        Label("删除自定义模型", systemImage: "trash")
+                    }
+                }
+                if let error = appState.library.lastErrorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Text("选择本地 MLX 模型目录（需含 config.json 与权重文件）后切换即可使用；多模态模型支持文字语义搜索。切换后为照片重新生成向量，旧向量超 30 天未用自动清理。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("分析任务") {
+                ForEach(AnalysisKind.allCases) { kind in
+                    taskRow(kind)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .task {
+            appState.tasks.refreshCompletion()
+        }
+        .onChange(of: navigation.vectorModelKey) { _, newValue in
+            appState.tasks.vectorModelKey = newValue
+            appState.saveSettings()
+            appState.tasks.start(.vectorIndex)
+            appState.tasks.refreshCompletion()
+        }
+    }
+
+    @ViewBuilder
+    private func taskRow(_ kind: AnalysisKind) -> some View {
+        let progress = appState.tasks.progress(for: kind)
+        let percent = appState.tasks.completionPercent(for: kind)
+        HStack(spacing: 10) {
+            Image(systemName: kind.iconName)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(kind.fallbackName)
+                    Spacer()
+                    Text("\(percent)%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: Double(percent), total: 100)
+                    .controlSize(.small)
+            }
+            taskControls(kind, progress)
+        }
+    }
+
+    @ViewBuilder
+    private func taskControls(_ kind: AnalysisKind, _ progress: TaskProgress) -> some View {
+        HStack(spacing: 6) {
+            switch progress.status {
+            case .running:
+                Button { appState.tasks.pause(kind) } label: { Image(systemName: "pause.fill") }
+                Button { appState.tasks.stop(kind) } label: { Image(systemName: "stop.fill") }
+            case .paused:
+                Button { appState.tasks.resume(kind) } label: { Image(systemName: "play.fill") }
+                Button { appState.tasks.stop(kind) } label: { Image(systemName: "stop.fill") }
+            case .queued, .stopping:
+                Button { appState.tasks.stop(kind) } label: { Image(systemName: "stop.fill") }
+            case .idle, .completed, .failed:
+                Button { appState.tasks.start(kind) } label: { Image(systemName: "play.fill") }
+            }
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+    }
+
+    private func importModelDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择"
+        panel.message = "选择本地 MLX 向量模型目录"
+        if panel.runModal() == .OK, let url = panel.url {
+            appState.configureCustomVectorModel(directoryURL: url)
+        }
     }
 
     @ViewBuilder

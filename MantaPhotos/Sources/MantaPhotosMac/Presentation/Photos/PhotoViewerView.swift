@@ -15,12 +15,7 @@ struct PhotoViewerView: View {
     @State private var showsInfo = false
     @State private var showsDeleteConfirmation = false
     @State private var isPlaying = false
-
-    // 缩放 / 平移手势状态（仅作用于静态图）。
-    @State private var zoomScale: CGFloat = 1
-    @State private var panOffset: CGSize = .zero
-    @GestureState private var pinchScale: CGFloat = 1
-    @GestureState private var dragTranslation: CGSize = .zero
+    @State private var extraDetail: PhotoExtraDetail = .empty
 
     var body: some View {
         ZStack {
@@ -55,8 +50,10 @@ struct PhotoViewerView: View {
             requestMedia()
         }
         .onChange(of: result.id) {
-            resetZoom()
             requestMedia()
+        }
+        .task(id: result.id) {
+            extraDetail = await appState.library.loadExtraDetail(photoID: result.id)
         }
         .onDisappear {
             PhotoThumbnailProvider.shared.cancel(thumbnailToken)
@@ -97,87 +94,25 @@ struct PhotoViewerView: View {
                 LivePhotoPlayerView(livePhoto: livePhoto, isPlaying: $isPlaying)
                     .padding(36)
             } else if let image {
-                zoomableImage(image)
+                stillImage(image)
             } else {
                 loadingView
             }
         case .image, .unknown:
             if let image {
-                zoomableImage(image)
+                stillImage(image)
             } else {
                 loadingView
             }
         }
     }
 
-    /// 可缩放 / 平移 / 双击放大 / 左右滑动切换的静态图。
-    private func zoomableImage(_ image: NSImage) -> some View {
-        let effectiveScale = max(1, zoomScale * pinchScale)
-        let offset = effectiveScale > 1
-            ? CGSize(
-                width: panOffset.width + dragTranslation.width,
-                height: panOffset.height + dragTranslation.height
-            )
-            : .zero
-
-        return Image(nsImage: image)
-            .resizable()
-            .scaledToFit()
-            .scaleEffect(effectiveScale)
-            .offset(offset)
-            .gesture(magnificationGesture.simultaneously(with: dragGesture))
-            .onTapGesture(count: 2) { toggleZoom() }
-            .padding(36)
-            .clipped()
-            .animation(.snappy(duration: 0.18), value: zoomScale)
-    }
-
-    private var magnificationGesture: some Gesture {
-        MagnificationGesture()
-            .updating($pinchScale) { value, state, _ in
-                state = value
-            }
-            .onEnded { value in
-                zoomScale = min(6, max(1, zoomScale * value))
-                if zoomScale <= 1 {
-                    panOffset = .zero
-                }
-            }
-    }
-
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .updating($dragTranslation) { value, state, _ in
-                if zoomScale > 1 {
-                    state = value.translation
-                }
-            }
-            .onEnded { value in
-                if zoomScale > 1 {
-                    panOffset.width += value.translation.width
-                    panOffset.height += value.translation.height
-                } else if value.translation.width < -60 {
-                    appState.library.selectAdjacentPhoto(delta: 1)
-                } else if value.translation.width > 60 {
-                    appState.library.selectAdjacentPhoto(delta: -1)
-                }
-            }
-    }
-
-    private func toggleZoom() {
-        withAnimation(.snappy(duration: 0.2)) {
-            if zoomScale > 1 {
-                zoomScale = 1
-                panOffset = .zero
-            } else {
-                zoomScale = 2.5
-            }
+    /// 静态图：手势由 `ZoomableImageView`（原生 NSScrollView）提供。
+    private func stillImage(_ image: NSImage) -> some View {
+        ZoomableImageView(image: image) { delta in
+            appState.library.selectAdjacentPhoto(delta: delta)
         }
-    }
-
-    private func resetZoom() {
-        zoomScale = 1
-        panOffset = .zero
+        .padding(36)
     }
 
     private var loadingView: some View {
@@ -264,21 +199,21 @@ struct PhotoViewerView: View {
                 } label: {
                     Label(result.asset.isFavorite ? "Favorited" : "Favorite", systemImage: result.asset.isFavorite ? "heart.fill" : "heart")
                 }
-                .keyboardShortcut(".", modifiers: [])
+                .keyboardShortcut("f", modifiers: [])
 
                 Button {
                     showsDeleteConfirmation = true
                 } label: {
                     Label("Delete", systemImage: "delete.left")
                 }
-                .keyboardShortcut(.delete, modifiers: [.command])
+                .keyboardShortcut("d", modifiers: [])
 
                 Button {
                     showsInfo.toggle()
                 } label: {
                     Label("Info", systemImage: "info.circle")
                 }
-                .keyboardShortcut("i", modifiers: [.command])
+                .keyboardShortcut("i", modifiers: [])
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.white)
@@ -310,13 +245,42 @@ struct PhotoViewerView: View {
                     scorePill("Overall", value: result.overallScore)
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Tags")
-                        .font(.headline)
-                    Text("P4+ custom model tags are reserved.")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
+                if let place = extraDetail.place {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("地点")
+                            .font(.headline)
+                        Label(place.displayLine, systemImage: "mappin.and.ellipse")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("标签")
+                        .font(.headline)
+                    if extraDetail.tags.isEmpty {
+                        Text("暂无标签（等待自动标签任务完成）")
+                            .foregroundStyle(.secondary)
+                            .font(.callout)
+                    } else {
+                        FlowLayout(spacing: 6) {
+                            ForEach(extraDetail.tags, id: \.self) { tag in
+                                Text(tag)
+                                    .font(.caption)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 5)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    appState.library.searchSimilar(to: result, spaceKey: appState.navigation.vectorModelKey)
+                } label: {
+                    Label("查找相似照片", systemImage: "rectangle.on.rectangle.angled")
+                }
+                .buttonStyle(.bordered)
             }
             .padding(22)
         }
@@ -325,7 +289,7 @@ struct PhotoViewerView: View {
 
     private var metadataRows: some View {
         VStack(alignment: .leading, spacing: 8) {
-            metadataRow("Type", value: result.asset.mediaType.rawValue)
+            metadataRow("Type", value: result.asset.mediaType.rawValue + (extraDetail.isRaw ? " · RAW" : ""))
             metadataRow("Size", value: "\(result.asset.width) x \(result.asset.height)")
             if let creationDate = result.asset.creationDate {
                 metadataRow("Date", value: creationDate.formatted(date: .abbreviated, time: .shortened))
@@ -467,6 +431,99 @@ struct PhotoViewerView: View {
         case 40..<60: return Color(red: 0.91, green: 0.77, blue: 0.34).opacity(0.85)
         default: return Color(red: 0.91, green: 0.55, blue: 0.62).opacity(0.85)
         }
+    }
+}
+
+/// 原生可缩放图片视图：基于 `NSScrollView` 的 `allowsMagnification`，
+/// 免费获得与系统照片一致的触控板手势——
+/// 捏合缩放、放大后双指拖拽 / 滚动平移、双击切换缩放；未放大时横向滑动切换上一/下一张。
+private struct ZoomableImageView: NSViewRepresentable {
+    var image: NSImage
+    var onNavigate: (Int) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> SwipeAwareScrollView {
+        let scrollView = SwipeAwareScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.backgroundColor = .clear
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 1
+        scrollView.maxMagnification = 6
+        scrollView.onNavigate = onNavigate
+
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.image = image
+        imageView.autoresizingMask = [.width, .height]
+        imageView.frame = scrollView.bounds
+        scrollView.documentView = imageView
+
+        let doubleClick = NSClickGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleClick(_:))
+        )
+        doubleClick.numberOfClicksRequired = 2
+        scrollView.addGestureRecognizer(doubleClick)
+
+        context.coordinator.scrollView = scrollView
+        context.coordinator.imageView = imageView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: SwipeAwareScrollView, context: Context) {
+        scrollView.onNavigate = onNavigate
+        if context.coordinator.imageView?.image !== image {
+            context.coordinator.imageView?.image = image
+            scrollView.magnification = 1
+            context.coordinator.imageView?.frame = scrollView.bounds
+        }
+    }
+
+    final class Coordinator {
+        weak var scrollView: NSScrollView?
+        weak var imageView: NSImageView?
+
+        @MainActor @objc func handleDoubleClick(_ recognizer: NSClickGestureRecognizer) {
+            guard let scrollView else { return }
+            if scrollView.magnification > 1.01 {
+                scrollView.magnification = 1
+            } else {
+                let point = recognizer.location(in: scrollView.documentView ?? scrollView)
+                scrollView.setMagnification(2.5, centeredAt: point)
+            }
+        }
+    }
+}
+
+/// 未放大时把横向双指滑动解释为「上一/下一张」，其余情况交给 `NSScrollView` 原生平移。
+final class SwipeAwareScrollView: NSScrollView {
+    var onNavigate: ((Int) -> Void)?
+    private var swipeAccumulator: CGFloat = 0
+    private var swipeFired = false
+
+    override func scrollWheel(with event: NSEvent) {
+        let horizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
+        if magnification <= 1.01, horizontalDominant {
+            if event.phase == .began {
+                swipeAccumulator = 0
+                swipeFired = false
+            }
+            swipeAccumulator += event.scrollingDeltaX
+            if !swipeFired, abs(swipeAccumulator) >= 60 {
+                onNavigate?(swipeAccumulator < 0 ? 1 : -1)
+                swipeFired = true
+            }
+            if event.phase == .ended || event.momentumPhase == .ended {
+                swipeAccumulator = 0
+                swipeFired = false
+            }
+            return
+        }
+        super.scrollWheel(with: event)
     }
 }
 
