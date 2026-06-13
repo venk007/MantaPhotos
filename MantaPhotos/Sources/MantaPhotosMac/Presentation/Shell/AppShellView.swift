@@ -196,6 +196,7 @@ struct TopBarView: View {
     private var logoButton: some View {
         Button {
             appState.navigation.route = .photos
+            appState.library.exitTrashView()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "camera")
@@ -238,6 +239,9 @@ struct TopBarView: View {
     private func topTab(_ route: AppRoute) -> some View {
         Button {
             appState.navigation.route = route
+            if route == .photos {
+                appState.library.exitTrashView()
+            }
         } label: {
             Label(appState.localized(route.localizationKey), systemImage: route.iconName)
                 .labelStyle(.titleAndIcon)
@@ -258,18 +262,29 @@ struct SidebarOverlayView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarView()
-                .frame(width: DesignSystem.Metrics.sidebarWidth)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
-                .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
-                .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 32)
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 16)
-        .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
-        .allowsHitTesting(appState.navigation.isSidebarExpanded)
-        .zIndex(5)
+        // 不再用 `HStack + Spacer(minLength: 0)` 撑满整行：那会让 `.allowsHitTesting`
+        // 作用域覆盖整个内容区（含右上角工具栏/缩放/评分维度/导入按钮等），
+        // 抽屉展开时这片透明 Spacer 会拦截下层所有点击，导致按钮失效。
+        // 直接让抽屉面板本身（固定宽度）参与 ZStack(alignment: .leading) 布局即可。
+        //
+        // 玻璃材质改用 `.regularMaterial`（而非 `.glassEffect`）：抽屉随
+        // `isSidebarExpanded` 频繁插入/移除并带 `.transition`，`.glassEffect`
+        // 的背景采样在视图重建/应用切前台时有约 1s 的初始化延迟，期间呈黑底，
+        // 之后才闪烁为真正的玻璃效果。`.regularMaterial` 基于成熟的
+        // `NSVisualEffectView`，无此初始化延迟，视觉上同样是半透明液态玻璃。
+        SidebarView()
+            .frame(width: DesignSystem.Metrics.sidebarWidth)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
+            .overlay {
+                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
+                    .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
+            .padding(.leading, 16)
+            .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 32)
+            .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
+            .allowsHitTesting(appState.navigation.isSidebarExpanded)
+            .zIndex(5)
     }
 }
 
@@ -313,6 +328,9 @@ struct LiquidGlassDock: View {
         let active = appState.navigation.route == route
         return Button {
             appState.navigation.route = route
+            if route == .photos {
+                appState.library.exitTrashView()
+            }
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: route.iconName)

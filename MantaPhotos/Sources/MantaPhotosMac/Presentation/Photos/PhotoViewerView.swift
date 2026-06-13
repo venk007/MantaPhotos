@@ -232,9 +232,13 @@ struct PhotoViewerView: View {
     private var detailPanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text(displayName)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(displayName)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    statusIcons
+                }
 
                 metadataRows
 
@@ -243,16 +247,6 @@ struct PhotoViewerView: View {
                         .font(.headline)
                     scorePill("Aesthetic", value: result.aestheticScore)
                     scorePill("Overall", value: result.overallScore)
-                }
-
-                if let place = extraDetail.place {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("地点")
-                            .font(.headline)
-                        Label(place.displayLine, systemImage: "mappin.and.ellipse")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -294,15 +288,43 @@ struct PhotoViewerView: View {
             if let creationDate = result.asset.creationDate {
                 metadataRow("Date", value: creationDate.formatted(date: .abbreviated, time: .shortened))
             }
-            metadataRow("Favorite", value: result.asset.isFavorite ? "Yes" : "No")
-            metadataRow("App Trash", value: result.asset.inTrash ? "Yes" : "No")
-            metadataRow("iCloud", value: result.asset.iCloudState.rawValue)
+            // 去掉 iCloud 状态行，原位置改为「Location」「Altitude」：
+            // 收藏 / 照片篓状态已上移到标题栏以图标展示（见 `statusIcons`）。
+            if let place = extraDetail.place {
+                if !place.displayLine.isEmpty {
+                    metadataRow("Location", value: place.displayLine)
+                }
+                // 海拔仅在超过 1000 米（高原/高山等显著海拔）时才展示，避免日常照片的噪音数据。
+                if let altitude = place.altitude, altitude > 1000 {
+                    metadataRow("Altitude", value: "\(Int(altitude.rounded())) m")
+                }
+            }
+        }
+    }
+
+    /// 收藏 / 照片篓状态：以图标直观呈现，不再单独占用一行文字。
+    /// 只展示「为真」的状态，避免一排灰色占位图标造成视觉噪音。
+    @ViewBuilder private var statusIcons: some View {
+        if result.asset.isFavorite || result.asset.inTrash {
+            HStack(spacing: 8) {
+                if result.asset.isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.pink)
+                        .help(appState.localized("Favorite"))
+                }
+                if result.asset.inTrash {
+                    Image(systemName: "trash.fill")
+                        .foregroundStyle(.secondary)
+                        .help(appState.localized("App Trash"))
+                }
+            }
+            .font(.callout)
         }
     }
 
     private func metadataRow(_ title: String, value: String) -> some View {
         HStack {
-            Text(title)
+            Text(appState.localized(title))
                 .foregroundStyle(.secondary)
             Spacer()
             Text(value)

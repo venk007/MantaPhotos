@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import CoreLocation
 import Foundation
 import ImageIO
@@ -11,7 +12,15 @@ import Vision
 struct TaggingProcessor: PhotoAnalysisProcessor {
     let kind: AnalysisKind = .tagging
     let repository: AnalysisDataRepository
+    /// 当前语言（决定标签展示语言：中文环境出中文标签，英文环境出英文标签）。
+    let localeIdentifier: String
     let loader = AssetImageLoader()
+
+    /// 标签匹配度阈值：仅保留 confidence ≥ 该值的高匹配标签。
+    static let confidenceThreshold: Float = 0.3
+    /// 内容标签上限：过阈值的标签按相似度降序排列，最多取前 5 个。
+    /// 年份 / 日期 / 国家 / 城市不在此列——它们由照片自身的拍摄时间与地理信息直接查询得出，不写入标签表。
+    static let maxTags = 5
 
     func countPending() throws -> Int { try repository.countPending(kind: kind.stateKey) }
 
@@ -20,10 +29,18 @@ struct TaggingProcessor: PhotoAnalysisProcessor {
     }
 
     func process(_ targets: [AnalysisTarget]) async throws -> Int {
+        let locale = localeIdentifier
         for target in targets {
             do {
                 let data = try await loader.imageData(for: target)
-                let labels = try await Self.classify(data: data)
+                let raw = try await Self.classify(data: data)
+                // 单语言策略：当前语言下没有合适展示名的标签（如中文环境里无中文
+                // 对应、也非公认英文术语的分类）直接丢弃，不写入标签表。
+                let labels = raw.compactMap { item in
+                    VisionTagLocalizer.displayName(forIdentifier: item.key, localeIdentifier: locale).map { name in
+                        (key: item.key, displayName: name, confidence: item.confidence)
+                    }
+                }
                 if !labels.isEmpty {
                     try repository.upsertTags(photoID: target.id, labels: labels)
                 }
@@ -35,57 +52,114 @@ struct TaggingProcessor: PhotoAnalysisProcessor {
         return targets.count
     }
 
+    /// 仅返回匹配度过阈值的标签（按置信度降序），最多 maxTags 个。
     private static func classify(data: Data) async throws -> [(key: String, confidence: Double)] {
         try await Task.detached(priority: .utility) {
             let request = VNClassifyImageRequest()
             let handler = VNImageRequestHandler(data: data, options: [:])
             try handler.perform([request])
             let observations = (request.results ?? [])
-                .filter { $0.confidence >= 0.1 }
-                .prefix(8)
+                .filter { $0.confidence >= confidenceThreshold }
+                .sorted { $0.confidence > $1.confidence }
+                .prefix(maxTags)
             return observations.map { (key: $0.identifier, confidence: Double($0.confidence)) }
         }.value
     }
 }
 
-// MARK: - 地理位置 → 地名
+// MARK: - 地理位置 → 地名（坐标聚类去重 + 限流 + 断点续跑）
 
 struct GeocodingProcessor: PhotoAnalysisProcessor {
     let kind: AnalysisKind = .geocoding
     let repository: AnalysisDataRepository
     let localeIdentifier: String
 
+    /// 坐标网格精度：小数位数。4 位 ≈ 10m 网格（同一地点只反查一次）。
+    static let gridDecimals = 4
+    /// 单个聚类反查的最大重试次数（跨会话累计；超过即视为终结，不再重试）。
+    static let maxClusterRetry = 5
+    /// 反查之间的限流间隔。
+    static let throttle = Duration.milliseconds(1100)
+
     func countPending() throws -> Int { try repository.countPending(kind: kind.stateKey) }
 
     func nextBatch(limit: Int) throws -> [AnalysisTarget] {
-        // MKReverseGeocodingRequest 有限流（每次请求都是独立实例），单批取小一些。
-        try repository.analysisTargets(ids: try repository.pendingPhotoIDs(kind: kind.stateKey, limit: min(limit, 20)))
+        // 聚类去重已大幅降低请求量；单批可比旧实现略大，但仍保守。
+        try repository.analysisTargets(ids: try repository.pendingPhotoIDs(kind: kind.stateKey, limit: min(limit, 40)))
     }
 
     func process(_ targets: [AnalysisTarget]) async throws -> Int {
-        for target in targets {
-            if let coordinate = coordinate(for: target) {
-                if let info = await reverseGeocode(location: coordinate, localeID: localeIdentifier) {
-                    try? repository.upsertLocation(
-                        photoID: target.id,
-                        latitude: coordinate.coordinate.latitude,
-                        longitude: coordinate.coordinate.longitude,
-                        country: info.country,
-                        administrativeArea: info.administrativeArea,
-                        locality: info.locality,
-                        placeName: info.name
-                    )
-                }
-                // 限流：每次反查后小憩，避免触发 MapKit 限流
-                try? await Task.sleep(for: .milliseconds(300))
+        // 阶段一：提取 GPS（经纬度 + 海拔）→ 网格聚类 → 落 photo_locations。无 GPS 直接标记完成。
+        var noGPS: [String] = []
+        for target in targets where (try? repository.hasPhotoLocation(photoID: target.id)) != true {
+            guard let location = await coordinate(for: target) else {
+                noGPS.append(target.id)
+                continue
+            }
+            let lat = location.coordinate.latitude
+            let lon = location.coordinate.longitude
+            let altitude: Double? = location.verticalAccuracy >= 0 ? location.altitude : nil
+            let gridLat = Self.snap(lat)
+            let gridLon = Self.snap(lon)
+            let geohash = Geohash.encode(latitude: lat, longitude: lon, length: 9)
+            if let cluster = try? repository.upsertCluster(gridLat: gridLat, gridLon: gridLon) {
+                try? repository.upsertPhotoCoordinate(
+                    photoID: target.id,
+                    latitude: lat,
+                    longitude: lon,
+                    altitude: altitude,
+                    geohash: geohash,
+                    clusterID: cluster.id
+                )
             }
         }
-        try repository.markAnalyzed(photoIDs: targets.map(\.id), kind: kind.stateKey)
+
+        // 阶段二：对这批照片所属、仍待反查的聚类（去重）限流反查；成功回填标签。
+        let clusterIDs = (try? repository.pendingClusterIDs(
+            forPhotoIDs: targets.map(\.id),
+            maxRetry: Self.maxClusterRetry
+        )) ?? []
+        for clusterID in clusterIDs {
+            guard let center = try? repository.clusterCenter(clusterID: clusterID) else { continue }
+            let location = CLLocation(latitude: center.latitude, longitude: center.longitude)
+            if let info = await reverseGeocode(location: location, localeID: localeIdentifier) {
+                try? repository.markClusterDone(
+                    clusterID: clusterID,
+                    country: info.country,
+                    countryCode: info.countryCode,
+                    admin1: info.administrativeArea,
+                    city: info.locality,
+                    placeName: info.name
+                )
+                try? repository.backfillClusterToPhotos(clusterID: clusterID)
+            } else {
+                try? repository.markClusterFailed(clusterID: clusterID)
+            }
+            try? await Task.sleep(for: Self.throttle)
+        }
+
+        // 阶段三：标记「已完成」—— 无 GPS 的 + 聚类已终结（done 或 retry 耗尽）的。
+        // 聚类仍 pending/failed-可重试 的照片不标记，留待下次会话重试（天然断点续跑）。
+        var resolved = noGPS
+        resolved += (try? repository.resolvedGeocodingPhotoIDs(
+            forPhotoIDs: targets.map(\.id),
+            maxRetry: Self.maxClusterRetry
+        )) ?? []
+        if !resolved.isEmpty {
+            try repository.markAnalyzed(photoIDs: Array(Set(resolved)), kind: kind.stateKey)
+        }
         return targets.count
     }
 
-    private func coordinate(for target: AnalysisTarget) -> CLLocation? {
+    /// 经纬度吸附到网格中心（按 gridDecimals 四舍五入）。
+    private static func snap(_ value: Double) -> Double {
+        let factor = pow(10.0, Double(gridDecimals))
+        return (value * factor).rounded() / factor
+    }
+
+    private func coordinate(for target: AnalysisTarget) async -> CLLocation? {
         if target.isSystemPhotos {
+            // 系统库的图片 / 视频都由 PhotoKit 直接给出 location（含海拔）。
             let result = PHAsset.fetchAssets(withLocalIdentifiers: [target.localIdentifier], options: nil)
             return result.firstObject?.location
         }
@@ -93,7 +167,46 @@ struct GeocodingProcessor: PhotoAnalysisProcessor {
             forSourceID: target.sourceID,
             relativePath: target.relativePath ?? target.localIdentifier
         ) else { return nil }
+        if target.mediaType == .video {
+            return await Self.videoLocation(url: url)
+        }
         return Self.exifLocation(url: url)
+    }
+
+    /// 本地视频容器 GPS：读 AVMetadata 通用 location 项（ISO6709 字符串，含可选海拔）。
+    private static func videoLocation(url: URL) async -> CLLocation? {
+        let asset = AVURLAsset(url: url)
+        guard let metadata = try? await asset.load(.commonMetadata) else { return nil }
+        let items = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierLocation)
+        guard let item = items.first,
+              let iso = try? await item.load(.stringValue) else {
+            return nil
+        }
+        return parseISO6709(iso)
+    }
+
+    /// 解析 ISO6709 坐标串（如 "+34.0522-118.2437+085.000/"）。按出现顺序取 纬度 / 经度 / 海拔。
+    private static func parseISO6709(_ string: String) -> CLLocation? {
+        guard let regex = try? NSRegularExpression(pattern: #"[+-]\d+(?:\.\d+)?"#) else { return nil }
+        let range = NSRange(string.startIndex..., in: string)
+        let numbers: [Double] = regex.matches(in: string, range: range).compactMap { match in
+            guard let r = Range(match.range, in: string) else { return nil }
+            return Double(string[r])
+        }
+        guard numbers.count >= 2 else { return nil }
+        let coordinate = CLLocationCoordinate2D(latitude: numbers[0], longitude: numbers[1])
+        if numbers.count >= 3 {
+            return CLLocation(
+                coordinate: coordinate,
+                altitude: numbers[2],
+                horizontalAccuracy: kCLLocationAccuracyBest,
+                // verticalAccuracy 必须 >= 0 才表示海拔有效（kCLLocationAccuracyBest = -1 是"无效"哨兵值，
+                // 会被 GeocodingProcessor 的 `verticalAccuracy >= 0` 判断丢弃）。
+                verticalAccuracy: 0,
+                timestamp: Date()
+            )
+        }
+        return CLLocation(latitude: numbers[0], longitude: numbers[1])
     }
 
     /// 反查地理位置。
@@ -114,17 +227,14 @@ struct GeocodingProcessor: PhotoAnalysisProcessor {
                 let representations = item.addressRepresentations
                 // region 是 Locale.Region，identifier 通常是国家代码（如 "US" / "CN"）；
                 // 用当前语言环境的 localizedString 把代码翻译成本地化国家名。
-                let country: String?
-                if let code = representations?.region?.identifier {
-                    country = locale.localizedString(forRegionCode: code)
-                } else {
-                    country = nil
-                }
+                let regionCode = representations?.region?.identifier
+                let country: String? = regionCode.flatMap { locale.localizedString(forRegionCode: $0) }
                 let info = GeocodedLocation(
                     name: item.name,
                     locality: representations?.cityName,
                     administrativeArea: representations?.regionName,
-                    country: country
+                    country: country,
+                    countryCode: regionCode
                 )
                 continuation.resume(returning: info)
             }
@@ -136,8 +246,10 @@ struct GeocodingProcessor: PhotoAnalysisProcessor {
         let locality: String?
         let administrativeArea: String?
         let country: String?
+        let countryCode: String?
     }
 
+    /// 本地图片 EXIF → CLLocation（含海拔）。海拔取 GPSAltitude，AltitudeRef==1 表示海平面以下取负。
     private static func exifLocation(url: URL) -> CLLocation? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -150,7 +262,57 @@ struct GeocodingProcessor: PhotoAnalysisProcessor {
         let lonRef = (gps[kCGImagePropertyGPSLongitudeRef] as? String) ?? "E"
         let latitude = latRef == "S" ? -lat : lat
         let longitude = lonRef == "W" ? -lon : lon
+        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+
+        // 海拔（可选）：有则构造带 altitude 的 CLLocation（verticalAccuracy>=0 表示有效）。
+        if let altitudeValue = gps[kCGImagePropertyGPSAltitude] as? Double {
+            let belowSeaLevel = (gps[kCGImagePropertyGPSAltitudeRef] as? Int) == 1
+            let altitude = belowSeaLevel ? -altitudeValue : altitudeValue
+            return CLLocation(
+                coordinate: coordinate,
+                altitude: altitude,
+                horizontalAccuracy: kCLLocationAccuracyBest,
+                // verticalAccuracy 必须 >= 0 才表示海拔有效（kCLLocationAccuracyBest = -1 是"无效"哨兵值，
+                // 会被 GeocodingProcessor 的 `verticalAccuracy >= 0` 判断丢弃）。
+                verticalAccuracy: 0,
+                timestamp: Date()
+            )
+        }
         return CLLocation(latitude: latitude, longitude: longitude)
+    }
+}
+
+// MARK: - Geohash 编码（无依赖实现，供地图聚合 / 附近查询）
+
+enum Geohash {
+    private static let base32 = Array("0123456789bcdefghjkmnpqrstuvwxyz")
+
+    static func encode(latitude: Double, longitude: Double, length: Int = 9) -> String {
+        var latRange = (-90.0, 90.0)
+        var lonRange = (-180.0, 180.0)
+        var hash = ""
+        var bit = 0
+        var ch = 0
+        var even = true
+
+        while hash.count < length {
+            if even {
+                let mid = (lonRange.0 + lonRange.1) / 2
+                if longitude >= mid { ch |= (1 << (4 - bit)); lonRange.0 = mid } else { lonRange.1 = mid }
+            } else {
+                let mid = (latRange.0 + latRange.1) / 2
+                if latitude >= mid { ch |= (1 << (4 - bit)); latRange.0 = mid } else { latRange.1 = mid }
+            }
+            even.toggle()
+            if bit < 4 {
+                bit += 1
+            } else {
+                hash.append(base32[ch])
+                bit = 0
+                ch = 0
+            }
+        }
+        return hash
     }
 }
 

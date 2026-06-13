@@ -164,6 +164,18 @@ public enum EmbeddingProviderRegistry {
 
 /// 向量数学与编解码（暴力 KNN 用；sqlite-vec 作为后续性能优化）。
 public enum VectorMath {
+    /// L2 归一化为单位向量。零向量原样返回。
+    ///
+    /// 入库前统一归一化，配合 `vec0` 的 `distance_metric=cosine`，使
+    /// sqlite-vec 距离与暴力 `cosineSimilarity` 口径一致，阈值方可标定。
+    public static func normalized(_ vector: [Float]) -> [Float] {
+        var norm: Float = 0
+        for value in vector { norm += value * value }
+        norm = norm.squareRoot()
+        guard norm > 0 else { return vector }
+        return vector.map { $0 / norm }
+    }
+
     public static func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
         guard lhs.count == rhs.count, !lhs.isEmpty else { return -1 }
         var dot: Float = 0, normL: Float = 0, normR: Float = 0

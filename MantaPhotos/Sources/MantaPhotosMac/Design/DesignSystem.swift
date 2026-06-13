@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 集中式设计令牌。
@@ -61,5 +62,125 @@ enum DesignSystem {
         static let scoreMedium = Color(red: 0.78, green: 0.50, blue: 0.10)
         static let scoreLow = Color(red: 0.74, green: 0.18, blue: 0.18)
         static let accent = Color.accentColor
+    }
+}
+
+/// 液态玻璃按钮的悬浮反馈：贴近 macOS 工具栏「玻璃按钮」在鼠标悬浮时轻微点亮 + 放大的交互语言
+/// （如系统照片 App 顶部工具栏）。不引入额外色彩，只叠加一层随外观自适应的 `primary` 透明遮罩。
+private struct GlassHoverHighlight<S: Shape>: ViewModifier {
+    let shape: S
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                // `allowsHitTesting(false)`：这层只是装饰性高光，不能拦截下层
+                // 按钮/菜单的点击——否则会出现「悬浮有效果但点击无响应」的问题。
+                shape.fill(Color.primary.opacity(isHovering ? 0.10 : 0))
+                    .allowsHitTesting(false)
+            }
+            .scaleEffect(isHovering ? 1.04 : 1.0)
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isHovering = hovering
+                }
+            }
+    }
+}
+
+extension View {
+    /// 为液态玻璃按钮 / 分段控件添加 hover 高亮 + 轻微放大反馈。
+    func glassHoverHighlight<S: Shape>(in shape: S) -> some View {
+        modifier(GlassHoverHighlight(shape: shape))
+    }
+}
+
+/// 双滑块区间选择器。
+///
+/// 用于替代「大于 / 小于」运算符式的分数筛选：两端把手分别对应区间下界与上界，
+/// 中段以系统强调色高亮，直观呈现当前筛选的分数区间。
+/// 视觉语言贴近 macOS 原生 `Slider`（细凹槽 + 圆形把手 + 投影），
+/// 拖动时切换为「张开的手」光标，符合系统级控件的交互反馈。
+struct RangeSliderView: View {
+    @Binding var lowerValue: Double
+    @Binding var upperValue: Double
+    var bounds: ClosedRange<Double> = 0...100
+    var step: Double = 1
+
+    private let thumbDiameter: CGFloat = 16
+    private let trackHeight: CGFloat = 4
+
+    var body: some View {
+        GeometryReader { geometry in
+            let usableWidth = max(0, geometry.size.width - thumbDiameter)
+            let lowerX = thumbDiameter / 2 + usableWidth * fraction(of: lowerValue)
+            let upperX = thumbDiameter / 2 + usableWidth * fraction(of: upperValue)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: trackHeight)
+
+                Capsule()
+                    .fill(DesignSystem.Glass.activeTint)
+                    .frame(width: max(0, upperX - lowerX), height: trackHeight)
+                    .offset(x: lowerX)
+
+                thumb(value: lowerValue, label: "Minimum score")
+                    .position(x: lowerX, y: geometry.size.height / 2)
+                    .gesture(dragGesture(usableWidth: usableWidth, isLower: true))
+
+                thumb(value: upperValue, label: "Maximum score")
+                    .position(x: upperX, y: geometry.size.height / 2)
+                    .gesture(dragGesture(usableWidth: usableWidth, isLower: false))
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .frame(height: thumbDiameter + 6)
+    }
+
+    private func fraction(of value: Double) -> Double {
+        guard bounds.upperBound > bounds.lowerBound else { return 0 }
+        return (value - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)
+    }
+
+    private func value(at x: CGFloat, usableWidth: CGFloat) -> Double {
+        guard usableWidth > 0 else { return bounds.lowerBound }
+        let fraction = min(1, max(0, (x - thumbDiameter / 2) / usableWidth))
+        let raw = bounds.lowerBound + fraction * (bounds.upperBound - bounds.lowerBound)
+        return (raw / step).rounded() * step
+    }
+
+    private func dragGesture(usableWidth: CGFloat, isLower: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { drag in
+                NSCursor.closedHand.set()
+                let newValue = value(at: drag.location.x, usableWidth: usableWidth)
+                if isLower {
+                    lowerValue = min(newValue, upperValue)
+                } else {
+                    upperValue = max(newValue, lowerValue)
+                }
+            }
+            .onEnded { _ in
+                NSCursor.openHand.set()
+            }
+    }
+
+    private func thumb(value: Double, label: String) -> some View {
+        Circle()
+            .fill(.white)
+            .frame(width: thumbDiameter, height: thumbDiameter)
+            .overlay(Circle().stroke(Color.black.opacity(0.15), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+            .accessibilityLabel(Text(label))
+            .accessibilityValue(Text("\(Int(value.rounded()))"))
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.openHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
     }
 }

@@ -12,12 +12,7 @@ struct PhotosPageView: View {
     @State private var showEmptyTrashConfirm = false
 
     private var trashActionBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "trash")
-                .foregroundStyle(.secondary)
-            Text("废片篓")
-                .font(.callout.weight(.medium))
-            Spacer()
+        SpecialAlbumBannerView(icon: "trash", title: appState.localized("App Trash")) {
             Button {
                 appState.library.restoreAllTrashed()
             } label: {
@@ -31,34 +26,27 @@ struct PhotosPageView: View {
             }
             .buttonStyle(.borderless)
         }
-        .padding(.horizontal, DesignSystem.Spacing.lg)
-        .padding(.vertical, 8)
-        .background(.regularMaterial)
+    }
+
+    private var similarModeBar: some View {
+        SpecialAlbumBannerView(icon: "rectangle.on.rectangle.angled", title: appState.localized("Similar Photos Results")) {
+            Button {
+                appState.library.exitSimilarMode()
+            } label: {
+                Label(appState.localized("Clear"), systemImage: "xmark")
+            }
+            .buttonStyle(.borderless)
+        }
     }
 
     var body: some View {
         @Bindable var library = appState.library
         VStack(spacing: 0) {
             PhotosToolbarView()
-            if appState.library.searchFilter.inTrash == true {
+            if appState.library.isTrashViewActive {
                 trashActionBar
             } else if appState.library.isSimilarMode {
-                HStack(spacing: 10) {
-                    Image(systemName: "rectangle.on.rectangle.angled")
-                        .foregroundStyle(.secondary)
-                    Text("相似照片结果")
-                        .font(.callout.weight(.medium))
-                    Spacer()
-                    Button {
-                        appState.library.exitSimilarMode()
-                    } label: {
-                        Label("清除", systemImage: "xmark")
-                    }
-                    .buttonStyle(.borderless)
-                }
-                .padding(.horizontal, DesignSystem.Spacing.lg)
-                .padding(.vertical, 8)
-                .background(.regularMaterial)
+                similarModeBar
             } else if !appState.library.searchFilter.isEmpty {
                 FindAppliedBannerView()
             }
@@ -142,6 +130,9 @@ struct PhotosPageView: View {
         .onChange(of: appState.library.searchFilter) {
             Task { await appState.library.refreshPhotos() }
         }
+        .onChange(of: appState.library.pendingScrollAnchorID) {
+            restoreScrollAnchorIfNeeded()
+        }
         .sheet(isPresented: $library.isViewerPresented) {
             if let result = appState.library.selectedPhotoForViewer {
                 PhotoViewerView(result: result)
@@ -168,6 +159,15 @@ struct PhotosPageView: View {
             try? await Task.sleep(for: .seconds(1.4))
             scrubberActive = false
         }
+    }
+
+    /// 「返回」后，把照片墙滚动回 `pendingScrollAnchorID` 所标记的照片，恢复上一次定位。
+    private func restoreScrollAnchorIfNeeded() {
+        guard let anchorID = appState.library.pendingScrollAnchorID else { return }
+        if let index = appState.library.photoResults.firstIndex(where: { $0.id == anchorID }) {
+            scrollToIndex = index
+        }
+        appState.library.pendingScrollAnchorID = nil
     }
 }
 
@@ -295,7 +295,48 @@ struct FindAppliedBannerView: View {
             .buttonStyle(.borderless)
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
-        .padding(.vertical, 8)
+        .frame(height: DesignSystem.Metrics.bannerHeight)
+        .background(.regularMaterial)
+    }
+}
+
+/// 「特殊相册」横幅：相似照片结果 / 废片篓等"带前置筛选条件的临时相册"统一外观。
+///
+/// 这是「浏览上下文返回栈」（`BrowseContext`）在 UI 层的标准呈现：左侧图标 + 标题表明
+/// 当前处于一个临时的特殊相册中，右侧固定提供「返回」——回到进入前的筛选结果、
+/// 滚动位置，并在原先打开过照片详情时重新打开。各相册自身的操作（清除 / 全部恢复 /
+/// 清空等）通过 `actions` 传入，排在「返回」之前。
+///
+/// 后续新增「智能筛选相册」「相册详情」等同类页面，复用这一组件即可获得一致的
+/// 外观与返回体验。
+struct SpecialAlbumBannerView<Actions: View>: View {
+    @Environment(AppState.self) private var appState
+    let icon: String
+    let title: String
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+
+            Spacer()
+
+            actions()
+
+            Button {
+                appState.library.goBack()
+            } label: {
+                Label(appState.localized("Back"), systemImage: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .frame(height: DesignSystem.Metrics.bannerHeight)
         .background(.regularMaterial)
     }
 
@@ -325,9 +366,6 @@ struct FindAppliedBannerView: View {
         if filter.favoritesOnly {
             parts.append("favorites")
         }
-        if filter.inTrash == true {
-            parts.append("trash")
-        }
         if filter.includeHidden {
             parts.append("hidden")
         }
@@ -336,6 +374,9 @@ struct FindAppliedBannerView: View {
         }
         if !filter.tagIDs.isEmpty {
             parts.append("tags")
+        }
+        if !filter.locationNames.isEmpty {
+            parts.append("location")
         }
         if !filter.personIDs.isEmpty {
             parts.append("people")
@@ -394,6 +435,11 @@ struct PhotosToolbarView: View {
                 Label(appState.localized("Score"), systemImage: "sparkles")
             }
             .disabled(appState.analysis.analysisProgress.isRunning)
+            .menuStyle(.borderlessButton)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+            .glassHoverHighlight(in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
 
             ZoomControlView()
 
@@ -442,21 +488,21 @@ struct ZoomControlView: View {
                 appState.navigation.adjustGridLevel(step: 1)
             } label: {
                 Image(systemName: "minus")
+                    .frame(width: 22, height: 22)
             }
             .disabled(currentIndex >= GridLevel.allCases.count - 1)
             .help(appState.localized("Zoom out"))
-
-            Text("\(appState.navigation.gridLevel.rawValue)")
-                .font(.caption.monospacedDigit())
-                .frame(width: 28)
+            .glassHoverHighlight(in: Circle())
 
             Button {
                 appState.navigation.adjustGridLevel(step: -1)
             } label: {
                 Image(systemName: "plus")
+                    .frame(width: 22, height: 22)
             }
             .disabled(currentIndex <= 0)
             .help(appState.localized("Zoom in"))
+            .glassHoverHighlight(in: Circle())
         }
         .buttonStyle(.borderless)
         .padding(4)
@@ -504,6 +550,7 @@ struct BadgeSegmentView: View {
                     .fill(DesignSystem.Glass.activeTint)
             }
         }
+        .glassHoverHighlight(in: RoundedRectangle(cornerRadius: DesignSystem.Radius.control))
     }
 }
 

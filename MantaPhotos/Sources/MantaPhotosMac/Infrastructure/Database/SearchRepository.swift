@@ -7,19 +7,36 @@ public struct PhotoSearchResult: Identifiable, Equatable, Sendable {
     public var asset: PhotoAsset
     public var aestheticScore: Double?
     public var overallScore: Double?
+    /// 相似照片检索的相似度（0~1，越大越相似）。仅在「相似照片」结果中非 nil，用于缩略图角标展示。
+    public var similarityScore: Double?
+    /// 是否为「相似照片」检索的基准照片本身（置于结果首位，缩略图角标展示为「原图」而非相似度）。
+    public var isReferencePhoto: Bool = false
 
-    public init(asset: PhotoAsset, aestheticScore: Double?, overallScore: Double?) {
+    public init(asset: PhotoAsset, aestheticScore: Double?, overallScore: Double?, similarityScore: Double? = nil, isReferencePhoto: Bool = false) {
         self.asset = asset
         self.aestheticScore = aestheticScore
         self.overallScore = overallScore
+        self.similarityScore = similarityScore
+        self.isReferencePhoto = isReferencePhoto
     }
 }
 
 public struct SearchRepository: Sendable {
     public let databaseQueue: DatabaseQueue
+    /// 仅检索这些源的内容（当前可访问的照片源）。nil = 不限制；空集 = 无可访问源（不返回任何结果）。
+    public let accessibleSourceIDs: Set<String>?
 
-    public init(databaseQueue: DatabaseQueue) {
+    public init(databaseQueue: DatabaseQueue, accessibleSourceIDs: Set<String>? = nil) {
         self.databaseQueue = databaseQueue
+        self.accessibleSourceIDs = accessibleSourceIDs
+    }
+
+    /// 可访问源约束子句（含前导空格）与其参数。nil 表示不追加。
+    private func sourceConstraint() -> (clause: String, args: [String])? {
+        guard let ids = accessibleSourceIDs else { return nil }
+        guard !ids.isEmpty else { return (" and 1 = 0", []) }
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+        return (" and photo_assets.source_id in (\(placeholders))", Array(ids))
     }
 
     public func search(filter: SearchFilterState, limit: Int = 200, offset: Int = 0) throws -> [PhotoAsset] {
@@ -51,6 +68,11 @@ public struct SearchRepository: Sendable {
                      )
                     """
                 _ = arguments.append(contentsOf: StatementArguments([keyword]))
+            }
+
+            if let constraint = sourceConstraint() {
+                sql += constraint.clause
+                _ = arguments.append(contentsOf: StatementArguments(constraint.args))
             }
 
             sql += " order by \(selection.orderBy)"
@@ -94,6 +116,11 @@ public struct SearchRepository: Sendable {
                 _ = arguments.append(contentsOf: StatementArguments([keyword]))
             }
 
+            if let constraint = sourceConstraint() {
+                sql += constraint.clause
+                _ = arguments.append(contentsOf: StatementArguments(constraint.args))
+            }
+
             sql += " order by \(selection.orderBy) limit ? offset ?"
             _ = arguments.append(contentsOf: StatementArguments([limit, offset]))
 
@@ -106,21 +133,23 @@ public struct SearchRepository: Sendable {
         guard !ids.isEmpty else { return [] }
         return try databaseQueue.read { database in
             let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
-            let rows = try Row.fetchAll(
-                database,
-                sql:
-                    """
-                    select
-                      photo_assets.*,
-                      photo_scores.aesthetic_score as score_aesthetic,
-                      null as score_overall
-                    from photo_assets
-                    left join photo_scores on photo_scores.photo_id = photo_assets.id
-                    where photo_assets.id in (\(placeholders))
-                      and photo_assets.system_deleted_at is null;
-                    """,
-                arguments: StatementArguments(ids)
-            )
+            var sql =
+                """
+                select
+                  photo_assets.*,
+                  photo_scores.aesthetic_score as score_aesthetic,
+                  null as score_overall
+                from photo_assets
+                left join photo_scores on photo_scores.photo_id = photo_assets.id
+                where photo_assets.id in (\(placeholders))
+                  and photo_assets.system_deleted_at is null
+                """
+            var arguments = StatementArguments(ids)
+            if let constraint = sourceConstraint() {
+                sql += constraint.clause
+                _ = arguments.append(contentsOf: StatementArguments(constraint.args))
+            }
+            let rows = try Row.fetchAll(database, sql: sql + ";", arguments: arguments)
             let byID = Dictionary(
                 rows.map(Self.mapSearchResult(row:)).map { ($0.id, $0) },
                 uniquingKeysWith: { lhs, _ in lhs }
@@ -154,6 +183,11 @@ public struct SearchRepository: Sendable {
                      )
                     """
                 _ = arguments.append(contentsOf: StatementArguments([keyword]))
+            }
+
+            if let constraint = sourceConstraint() {
+                sql += constraint.clause
+                _ = arguments.append(contentsOf: StatementArguments(constraint.args))
             }
 
             return try Int.fetchOne(database, sql: sql, arguments: arguments) ?? 0

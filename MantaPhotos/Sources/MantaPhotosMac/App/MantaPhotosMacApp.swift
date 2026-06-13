@@ -29,6 +29,9 @@ public struct MantaPhotosApp: App {
                 .onChange(of: appState.navigation.badgeMetric) {
                     appState.saveSettings()
                 }
+                .onChange(of: appState.navigation.sidebarShownOnLaunch) {
+                    appState.saveSettings()
+                }
         }
         .commands {
             CommandGroup(after: .sidebar) {

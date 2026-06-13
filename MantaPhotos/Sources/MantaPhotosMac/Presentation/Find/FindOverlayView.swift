@@ -5,6 +5,14 @@ struct FindOverlayView: View {
     @FocusState private var queryFocused: Bool
     @State private var sidebarWasExpanded = false
     @State private var tagOptions: [PhotoTagOption] = []
+    @State private var tagQuery = ""
+    @State private var showsAllTagOptions = false
+    @State private var locationOptions: [PhotoLocationOption] = []
+    @State private var locationQuery = ""
+    @State private var showsAllLocationOptions = false
+
+    /// 「前 N 项 + 手动搜索联动 + 更多按钮」列表展示的统一上限。
+    private static let topListLimit = 20
 
     var body: some View {
         @Bindable var library = appState.library
@@ -26,7 +34,6 @@ struct FindOverlayView: View {
                         statusSection
                         sourceSection
                         locationSection
-                        peopleSection
                         tagSection
                     }
                     .padding(.horizontal, 22)
@@ -171,29 +178,23 @@ struct FindOverlayView: View {
                 }
 
                 HStack(spacing: 10) {
-                    segmentedOperator("Greater Than", active: scoreOperator == .greaterThan) {
-                        scoreOperator = .greaterThan
-                    }
-                    segmentedOperator("Less Than", active: scoreOperator == .lessThan) {
-                        scoreOperator = .lessThan
-                    }
-                    Spacer()
-                }
-
-                HStack(spacing: 10) {
                     Text("0")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Slider(value: scoreValue, in: 0...100, step: 1)
+                    RangeSliderView(lowerValue: lowerScoreValue, upperValue: upperScoreValue)
                     Text("100")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Stepper(value: scoreIntValue, in: 0...100) {
-                        Text("\(Int(currentScoreValue))")
-                            .font(.callout.monospacedDigit())
-                            .frame(width: 36, alignment: .trailing)
+                }
+
+                // 高分照片 / 低分照片 快捷筛选，与侧栏快捷筛选逻辑一致（单选，再点一次清空）。
+                FlowLayout(spacing: 8) {
+                    chip("High Score Photos", icon: "star.fill", active: isHighScoreQuickFilterActive) {
+                        toggleHighScoreQuickFilter()
                     }
-                    .labelsHidden()
+                    chip("Low Score Photos", icon: "arrow.down.right", active: isLowScoreQuickFilterActive) {
+                        toggleLowScoreQuickFilter()
+                    }
                 }
 
                 Text(scoreHint)
@@ -244,8 +245,8 @@ struct FindOverlayView: View {
                     appState.library.searchFilter.favoritesOnly.toggle()
                 }
                 disabledChip("Duplicate", icon: "doc.on.doc")
-                chip("Trash", icon: "trash", active: appState.library.searchFilter.inTrash == true) {
-                    appState.library.searchFilter.inTrash = appState.library.searchFilter.inTrash == true ? false : true
+                chip("Trash", icon: "trash", active: appState.library.isTrashViewActive) {
+                    appState.library.toggleTrashView()
                 }
             }
         }
@@ -256,50 +257,104 @@ struct FindOverlayView: View {
             FlowLayout(spacing: 8) {
                 sourceChip(.phone, icon: "iphone")
                 sourceChip(.pocket, icon: "camera.viewfinder")
+                sourceChip(.camera, icon: "camera")
                 sourceChip(.actionCamera, icon: "figure.run")
                 sourceChip(.drone, icon: "airplane")
-                sourceChip(.camera, icon: "camera")
                 sourceChip(.screenshot, icon: "rectangle.on.rectangle")
             }
         }
     }
 
     private var locationSection: some View {
-        findSection("Location", icon: "mappin.and.ellipse", isClearVisible: false, clear: {}) {
-            FlowLayout(spacing: 8) {
-                disabledChip("Beijing", icon: "mappin")
-                disabledChip("Shanghai", icon: "mappin")
-                disabledChip("Japan", icon: "mappin")
-                disabledChip("Trip", icon: "map")
-            }
-        }
-    }
-
-    private var peopleSection: some View {
-        findSection("People", icon: "person", isClearVisible: false, clear: {}) {
+        findSection("Location", icon: "mappin.and.ellipse", isClearVisible: !appState.library.searchFilter.locationNames.isEmpty) {
+            appState.library.searchFilter.locationNames = []
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
-                searchPlaceholder("Search people")
-                FlowLayout(spacing: 8) {
-                    disabledChip("People", icon: "person")
-                    disabledChip("Family", icon: "person.2")
-                    disabledChip("Friends", icon: "person.3")
+                inlineSearchField(placeholder: "Search locations", text: $locationQuery)
+                if locationOptions.isEmpty {
+                    Text(appState.localized("No locations yet"))
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                } else if visibleLocationOptions.isEmpty {
+                    Text(appState.localized("No matching locations"))
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    FlowLayout(spacing: 8) {
+                        ForEach(visibleLocationOptions) { option in
+                            locationChip(option)
+                        }
+                        if isLocationMoreButtonVisible {
+                            chip(showsAllLocationOptions ? "Less" : "More", icon: showsAllLocationOptions ? "chevron.up" : "chevron.down", active: false) {
+                                showsAllLocationOptions.toggle()
+                            }
+                        }
+                    }
                 }
             }
         }
+        .task {
+            locationOptions = await appState.library.topLocations()
+        }
+    }
+
+    /// 前 20 项（按照片数量排序）+ 手动输入联动查询 + 「更多」展开全量，逻辑与标签筛选一致。
+    private var visibleLocationOptions: [PhotoLocationOption] {
+        let query = locationQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            return locationOptions.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        }
+        return showsAllLocationOptions ? locationOptions : Array(locationOptions.prefix(Self.topListLimit))
+    }
+
+    private var isLocationMoreButtonVisible: Bool {
+        locationQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && locationOptions.count > Self.topListLimit
+    }
+
+    private func locationChip(_ option: PhotoLocationOption) -> some View {
+        let active = appState.library.searchFilter.locationNames.contains(option.name)
+        return Button {
+            if active {
+                appState.library.searchFilter.locationNames.remove(option.name)
+            } else {
+                appState.library.searchFilter.locationNames.insert(option.name)
+            }
+        } label: {
+            Label(option.displayName, systemImage: "mappin")
+                .font(.callout)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .foregroundStyle(active ? .white : .secondary)
+                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var tagSection: some View {
         findSection("Tags", icon: "tag", isClearVisible: !appState.library.searchFilter.tagIDs.isEmpty) {
             appState.library.searchFilter.tagIDs = []
         } content: {
-            if tagOptions.isEmpty {
-                Text(appState.localized("No tags yet"))
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-            } else {
-                FlowLayout(spacing: 8) {
-                    ForEach(tagOptions) { option in
-                        tagChip(option)
+            VStack(alignment: .leading, spacing: 8) {
+                inlineSearchField(placeholder: "Search tags", text: $tagQuery)
+                if tagOptions.isEmpty {
+                    Text(appState.localized("No tags yet"))
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                } else if visibleTagOptions.isEmpty {
+                    Text(appState.localized("No matching tags"))
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    FlowLayout(spacing: 8) {
+                        ForEach(visibleTagOptions) { option in
+                            tagChip(option)
+                        }
+                        if isTagMoreButtonVisible {
+                            chip(showsAllTagOptions ? "Less" : "More", icon: showsAllTagOptions ? "chevron.up" : "chevron.down", active: false) {
+                                showsAllTagOptions.toggle()
+                            }
+                        }
                     }
                 }
             }
@@ -307,6 +362,19 @@ struct FindOverlayView: View {
         .task {
             tagOptions = await appState.library.topTags()
         }
+    }
+
+    private var visibleTagOptions: [PhotoTagOption] {
+        let query = tagQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            return tagOptions.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+        }
+        return showsAllTagOptions ? tagOptions : Array(tagOptions.prefix(Self.topListLimit))
+    }
+
+    private var isTagMoreButtonVisible: Bool {
+        tagQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && tagOptions.count > Self.topListLimit
     }
 
     private func tagChip(_ option: PhotoTagOption) -> some View {
@@ -412,18 +480,6 @@ struct FindOverlayView: View {
             .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
     }
 
-    private func segmentedOperator(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(appState.localized(title))
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
     private func scoreDimensionForeground(active: Bool, enabled: Bool) -> AnyShapeStyle {
         if active {
             return AnyShapeStyle(.white)
@@ -438,6 +494,30 @@ struct FindOverlayView: View {
             .padding(.vertical, 7)
             .foregroundStyle(.tertiary)
             .background(.quaternary, in: Capsule())
+    }
+
+    /// 地点 / 标签筛选的手动输入框：联动过滤已有选项，不接受自由文本提交
+    /// （即不会创建不存在的地点 / 标签，只用于从既有列表中快速定位）。
+    private func inlineSearchField(placeholder: String, text: Binding<String>) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField(appState.localized(placeholder), text: text)
+                .textFieldStyle(.plain)
+            if !text.wrappedValue.isEmpty {
+                Button {
+                    text.wrappedValue = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func searchPlaceholder(_ placeholder: String) -> some View {
@@ -510,54 +590,49 @@ struct FindOverlayView: View {
     }
 
     private var scoreSummary: String {
-        let score = Int(currentScoreValue.rounded())
-        let op = scoreOperator == .greaterThan ? ">" : "<"
-        return "\(appState.localized("Aesthetic"))\(op)\(score)"
+        appState.library.searchFilter.scoreFilterSummary(localizer: appState.localized)
+            ?? appState.localized("Aesthetic")
     }
 
     private var scoreHint: String {
-        let value = Int(currentScoreValue.rounded())
-        if !isScoreActive {
-            return appState.localized("Score filter inactive")
-        }
-        if scoreOperator == .greaterThan {
-            return "\(appState.localized("Only show aesthetic greater than")) \(value)"
-        }
-        return "\(appState.localized("Only show aesthetic less than")) \(value)"
+        appState.library.searchFilter.scoreFilterSummary(localizer: appState.localized)
+            ?? appState.localized("Score filter inactive")
     }
 
-    private var scoreOperator: ScoreOperator {
-        get {
-            appState.library.searchFilter.maximumAestheticScore == nil ? .greaterThan : .lessThan
-        }
-        nonmutating set {
-            let value = currentScoreValue
-            if newValue == .greaterThan {
-                appState.library.searchFilter.minimumAestheticScore = value <= 1 ? nil : value
-                appState.library.searchFilter.maximumAestheticScore = nil
-            } else {
-                appState.library.searchFilter.maximumAestheticScore = value <= 1 ? nil : value
-                appState.library.searchFilter.minimumAestheticScore = nil
+    private var isHighScoreQuickFilterActive: Bool {
+        appState.library.searchFilter.isHighScoreQuickFilterActive
+    }
+
+    private var isLowScoreQuickFilterActive: Bool {
+        appState.library.searchFilter.isLowScoreQuickFilterActive
+    }
+
+    private func toggleHighScoreQuickFilter() {
+        appState.library.searchFilter.toggleHighScoreQuickFilter()
+    }
+
+    private func toggleLowScoreQuickFilter() {
+        appState.library.searchFilter.toggleLowScoreQuickFilter()
+    }
+
+    private var lowerScoreValue: Binding<Double> {
+        Binding(
+            get: { appState.library.searchFilter.minimumAestheticScore ?? 0 },
+            set: { newValue in
+                let clamped = min(max(0, newValue), upperScoreValue.wrappedValue)
+                appState.library.searchFilter.minimumAestheticScore = clamped <= 0 ? nil : clamped
             }
-        }
-    }
-
-    private var scoreValue: Binding<Double> {
-        Binding(
-            get: { currentScoreValue },
-            set: { setScoreValue($0.rounded()) }
         )
     }
 
-    private var scoreIntValue: Binding<Int> {
+    private var upperScoreValue: Binding<Double> {
         Binding(
-            get: { Int(currentScoreValue.rounded()) },
-            set: { setScoreValue(Double($0)) }
+            get: { appState.library.searchFilter.maximumAestheticScore ?? 100 },
+            set: { newValue in
+                let clamped = max(min(100, newValue), lowerScoreValue.wrappedValue)
+                appState.library.searchFilter.maximumAestheticScore = clamped >= 100 ? nil : clamped
+            }
         )
-    }
-
-    private var currentScoreValue: Double {
-        appState.library.searchFilter.maximumAestheticScore ?? appState.library.searchFilter.minimumAestheticScore ?? 0
     }
 
     private var isMediaActive: Bool {
@@ -573,22 +648,11 @@ struct FindOverlayView: View {
     }
 
     private var isStatusActive: Bool {
-        appState.library.searchFilter.favoritesOnly || appState.library.searchFilter.inTrash == true
+        appState.library.searchFilter.favoritesOnly
     }
 
     private var isSourceActive: Bool {
         !appState.library.searchFilter.deviceCategories.isEmpty
-    }
-
-    private func setScoreValue(_ value: Double) {
-        let normalized = min(100, max(0, value))
-        if scoreOperator == .greaterThan {
-            appState.library.searchFilter.minimumAestheticScore = normalized <= 1 ? nil : normalized
-            appState.library.searchFilter.maximumAestheticScore = nil
-        } else {
-            appState.library.searchFilter.maximumAestheticScore = normalized <= 1 ? nil : normalized
-            appState.library.searchFilter.minimumAestheticScore = nil
-        }
     }
 
     private func toggleMediaType(_ mediaType: MediaType) {
@@ -612,7 +676,6 @@ struct FindOverlayView: View {
 
     private func clearStatus() {
         appState.library.searchFilter.favoritesOnly = false
-        appState.library.searchFilter.inTrash = false
     }
 
     private func clearDeviceSource() {
@@ -626,7 +689,7 @@ struct FindOverlayView: View {
         case .pocket: "Pocket"
         case .actionCamera: "Action Cam"
         case .drone: "Drone"
-        case .camera: "Camera"
+        case .camera: "SLR Camera"
         case .screenshot: "Screenshot"
         case .unknown: "Unknown"
         }
@@ -815,9 +878,4 @@ struct FindOverlayView: View {
             return false
         }
     }
-}
-
-private enum ScoreOperator {
-    case greaterThan
-    case lessThan
 }

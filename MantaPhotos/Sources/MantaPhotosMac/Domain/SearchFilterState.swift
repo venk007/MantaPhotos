@@ -16,6 +16,7 @@ public struct SearchFilterState: Equatable, Codable, Sendable {
     public var iCloudStates: Set<ICloudState> = []
     public var deviceCategories: Set<DeviceCategory> = []
     public var tagIDs: Set<String> = []
+    public var locationNames: Set<String> = []
     public var personIDs: Set<String> = []
     public var sortMode: SortMode = .creationDateDescending
 
@@ -35,6 +36,7 @@ public struct SearchFilterState: Equatable, Codable, Sendable {
             && iCloudStates.isEmpty
             && deviceCategories.isEmpty
             && tagIDs.isEmpty
+            && locationNames.isEmpty
             && personIDs.isEmpty
     }
 
@@ -108,6 +110,19 @@ public struct SearchFilterState: Equatable, Codable, Sendable {
             arguments.append(contentsOf: tagIDs.map { .text($0) })
         }
 
+        if !locationNames.isEmpty {
+            clauses.append(
+                """
+                exists (
+                  select 1 from photo_locations
+                  where photo_locations.photo_id = photo_assets.id
+                    and photo_locations.locality in (\(Self.placeholders(count: locationNames.count)))
+                )
+                """
+            )
+            arguments.append(contentsOf: locationNames.map { .text($0) })
+        }
+
         if !personIDs.isEmpty {
             clauses.append(
                 """
@@ -137,6 +152,85 @@ public struct SearchFilterState: Equatable, Codable, Sendable {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
     }
+
+    /// 评分筛选的完整文案，用于全局查找浮层。
+    ///
+    /// 规则（与重构前一致）：
+    /// - 最低分为 0 且最高分小于 100 → "搜索小于 N 分数的照片"
+    /// - 最低分大于 0 且最高分为 100 → "搜索大于 N 分数的照片"
+    /// - 最低分大于 0 且最高分小于 100 → "搜索 A 到 B 分数的照片"
+    /// - 两端都未设置 → 未启用评分筛选，返回 `nil`
+    public func scoreFilterSummary(localizer: (String) -> String) -> String? {
+        let hasMin = (minimumAestheticScore ?? 0) > 0
+        let hasMax = (maximumAestheticScore ?? 100) < 100
+        let lower = Int((minimumAestheticScore ?? 0).rounded())
+        let upper = Int((maximumAestheticScore ?? 100).rounded())
+
+        switch (hasMin, hasMax) {
+        case (false, false):
+            return nil
+        case (false, true):
+            return String(format: localizer("Score Filter Below Format"), upper)
+        case (true, false):
+            return String(format: localizer("Score Filter Above Format"), lower)
+        case (true, true):
+            return String(format: localizer("Score Filter Range Format"), lower, upper)
+        }
+    }
+
+    /// 高分照片阈值：与四档评分配色的最高档下限保持一致。
+    public static let highScoreThreshold: Double = 80
+    /// 低分照片阈值：与四档评分配色的最低档上限保持一致。
+    public static let lowScoreThreshold: Double = 40
+
+    /// “高分照片”快捷筛选是否处于激活状态。
+    public var isHighScoreQuickFilterActive: Bool {
+        minimumAestheticScore == Self.highScoreThreshold && maximumAestheticScore == nil
+    }
+
+    /// “低分照片”快捷筛选是否处于激活状态。
+    public var isLowScoreQuickFilterActive: Bool {
+        maximumAestheticScore == Self.lowScoreThreshold && minimumAestheticScore == nil
+    }
+
+    /// 切换“高分照片”快捷筛选：单选语义，再次点击即清空。
+    public mutating func toggleHighScoreQuickFilter() {
+        if isHighScoreQuickFilterActive {
+            minimumAestheticScore = nil
+        } else {
+            minimumAestheticScore = Self.highScoreThreshold
+            maximumAestheticScore = nil
+        }
+    }
+
+    /// 切换“低分照片”快捷筛选：单选语义，再次点击即清空。
+    public mutating func toggleLowScoreQuickFilter() {
+        if isLowScoreQuickFilterActive {
+            maximumAestheticScore = nil
+        } else {
+            maximumAestheticScore = Self.lowScoreThreshold
+            minimumAestheticScore = nil
+        }
+    }
+
+    /// 评分筛选的极简文案（≤12 个汉字），用于侧栏快捷筛选标签，逻辑与 `scoreFilterSummary` 一致。
+    public func scoreFilterSummaryCompact(localizer: (String) -> String) -> String? {
+        let hasMin = (minimumAestheticScore ?? 0) > 0
+        let hasMax = (maximumAestheticScore ?? 100) < 100
+        let lower = Int((minimumAestheticScore ?? 0).rounded())
+        let upper = Int((maximumAestheticScore ?? 100).rounded())
+
+        switch (hasMin, hasMax) {
+        case (false, false):
+            return nil
+        case (false, true):
+            return String(format: localizer("Score Filter Below Compact"), upper)
+        case (true, false):
+            return String(format: localizer("Score Filter Above Compact"), lower)
+        case (true, true):
+            return String(format: localizer("Score Filter Range Compact"), lower, upper)
+        }
+    }
 }
 
 public enum DeviceCategory: String, Codable, CaseIterable, Sendable, Identifiable {
@@ -156,7 +250,7 @@ public enum DeviceCategory: String, Codable, CaseIterable, Sendable, Identifiabl
         case .pocket: "Device Pocket"
         case .actionCamera: "Device Action Camera"
         case .drone: "Device Drone"
-        case .camera: "Device Camera"
+        case .camera: "Device SLR Camera"
         case .screenshot: "Device Screenshot"
         case .unknown: "Device Unknown"
         }

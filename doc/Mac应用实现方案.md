@@ -1861,6 +1861,16 @@ P2 保留项（从原 P2）：sqlite-vec 加载降级策略、embedding 断点�
 
 > P2-C 混合搜索（query understanding）仍未实现，按 §8.5 规划保留。详细验收项见 `doc/待验证与修复清单.md` §10–§12。
 
+### 8.7 三大功能重构（2026-06-12，设计待审查）
+
+P2-A/P2-B 落地后复盘发现三项与既定设计有偏差，已编制专门重构设计 `doc/三大功能重构设计.md`，要点：
+
+- **自动标签**：现状只存 `VNClassifyImageRequest` 英文原始标签 → 重构为「年份 + 国家 + 城市 + 内容（中文词表零样本）」槽位化、最多 10 个标签，新增 `label_vocab` + 每模型 `vec_label_<model>` 词表向量表，支持视频抽帧聚合。
+- **逆地理**：现状 `GeocodingProcessor` 逐张请求 `MKReverseGeocodingRequest`（无去重）→ 重构为 `coord_clusters` **坐标网格（~100m）聚类去重 + 状态机限流 + 全量→增量断点续跑**，并把国家/城市回写为可搜索标签（现状只写 `photo_locations`、不进 FTS）。
+- **语义搜索**：先修向量评分一致性 bug（`vec0` 未声明 `distance_metric=cosine`、入库未 L2 归一化、`SQLiteVecIndex.nearest` 返回 `-距离` 与暴力路径余弦相似度口径不一致）；多模态默认模型定为 **MobileCLIP2**（可切 JINA / 后期 Gemma，同时只启用一个），Apple 图像特征向量退为「找相似」专用；补齐 **阈值过滤 + RRF 混合检索 + 重排**。
+
+> 数据库变更集中在 migration 7 = `p3_tagging_geo_semantic`（当前最高 version 6）。开发顺序与决策点见该文档 §7 / §9。
+
 ---
 
 ## 9. 风险与应对

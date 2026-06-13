@@ -34,8 +34,10 @@ enum SQLiteVecIndex {
 
     static func ensureTable(_ db: Database, spaceKey: String, dimension: Int) throws {
         let name = tableName(forSpace: spaceKey)
+        // distance_metric=cosine：配合入库前 L2 归一化，使距离 = 余弦距离，
+        // 相似度 = 1 - distance，与暴力 KNN 的 cosineSimilarity 同口径（阈值可统一标定）。
         try db.execute(
-            sql: "create virtual table if not exists \(name) using vec0(photo_id text primary key, embedding float[\(dimension)]);"
+            sql: "create virtual table if not exists \(name) using vec0(photo_id text primary key, embedding float[\(dimension)] distance_metric=cosine);"
         )
     }
 
@@ -58,10 +60,11 @@ enum SQLiteVecIndex {
                 order by distance
                 limit ?;
                 """,
-            arguments: [VectorMath.data(from: query), limit]
+            arguments: [VectorMath.data(from: VectorMath.normalized(query)), limit]
         )
-        // 距离越小越相似 → 取负作为分数，排序时高分（更相似）靠前。
-        return rows.map { VectorMatch(photoID: $0["photo_id"], score: -Float($0["distance"] as Double)) }
+        // cosine 表：distance = 余弦距离 ∈ [0,2] → 相似度 = 1 - distance ∈ [-1,1]，
+        // 与暴力路径的 cosineSimilarity 同口径，越大越相似。
+        return rows.map { VectorMatch(photoID: $0["photo_id"], score: 1 - Float($0["distance"] as Double)) }
     }
 
     static func dropSpace(_ db: Database, spaceKey: String) throws {

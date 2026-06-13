@@ -11,6 +11,10 @@ import Photos
 @Observable
 final class PhotoLibraryViewModel {
     var searchFilter = SearchFilterState()
+    /// 废片篓是一个独立功能，而非 `searchFilter` 的一项筛选条件：
+    /// 开启时叠加显示已删除照片，不修改 `searchFilter` 本身，
+    /// 因此退出废片篓返回照片页时，原有筛选条件原样保留。
+    private(set) var isTrashViewActive = false
     private(set) var photoResults: [PhotoSearchResult] = []
     private(set) var matchedPhotoCount = 0
     private(set) var isRefreshingPhotos = false
@@ -23,6 +27,13 @@ final class PhotoLibraryViewModel {
     var selectedPhotoID: String?
     var selectedPhotoForViewer: PhotoSearchResult?
     var isViewerPresented = false
+
+    /// 浏览上下文返回栈：详见 `BrowseContext`。
+    private(set) var browseStack: [BrowseContext] = []
+    /// 「返回」恢复后，照片墙应滚动回到的照片 ID；由 `PhotosPageView` 消费后清空。
+    var pendingScrollAnchorID: String?
+    /// 是否存在可返回的上一次浏览位置（驱动"返回"按钮的展示）。
+    var canGoBack: Bool { !browseStack.isEmpty }
 
     /// 当前所有照片源（系统图库 + 本地目录等）。
     private(set) var sources: [PhotoSourceDescriptor] = []
@@ -207,6 +218,22 @@ final class PhotoLibraryViewModel {
         startImport()
     }
 
+    /// 启动时自动加载所有当前可访问源的内容：系统图库 + 已注册的本地目录（增量、幂等）。
+    /// 这样打开应用即展示可访问项，无需手动点击导入。
+    func startAccessibleSourceImports() {
+        // 系统图库：仅在可访问（已授权且库卷可用）时导入。
+        if sourceAvailability[PhotoSourceDescriptor.systemPhotosID] != false {
+            startInitialImportIfPossible()
+        }
+        // 本地目录源：对每个可访问且已注册的源做增量扫描；导入完成后各自刷新照片墙。
+        guard let databaseQueue else { return }
+        for descriptor in sources where descriptor.kind.isFileBased {
+            guard sourceAvailability[descriptor.id] == true,
+                  let url = PhotoSourceRegistry.shared.rootURL(forSourceID: descriptor.id) else { continue }
+            runLocalImport(sourceID: descriptor.id, rootURL: url, databaseQueue: databaseQueue)
+        }
+    }
+
     func startImport() {
         guard importTask == nil, let databaseQueue else { return }
 
@@ -269,10 +296,90 @@ final class PhotoLibraryViewModel {
 
     // MARK: - 查询与分页
 
+    /// 实际用于查询的筛选条件：在 `searchFilter` 基础上按废片篓视图状态
+    /// 覆盖 `inTrash`，但不修改 `searchFilter` 本身（见类型注释）。
+    private var effectiveFilter: SearchFilterState {
+        var filter = searchFilter
+        filter.inTrash = isTrashViewActive
+        return filter
+    }
+
+    /// 切换废片篓视图。这是一个独立的查看模式，不写入 `searchFilter`，
+    /// 因此再次点击照片页菜单 / 底部组件返回照片页时，原有筛选条件不受影响。
+    ///
+    /// 进入时把当前位置（筛选结果 + 滚动锚点）推入返回栈；再次点击（即关闭）时
+    /// 走 `goBack()` 还原，与「相似照片」的返回路径保持一致。
+    func toggleTrashView() {
+        if isTrashViewActive {
+            goBack()
+            return
+        }
+        pushBrowseContext(viewerPhotoID: nil, anchorPhotoID: photoResults.first?.id)
+        isTrashViewActive = true
+        Task { await refreshPhotos() }
+    }
+
+    /// 退出废片篓视图，返回照片页并保留原有筛选条件。
+    /// 用于「切换路由 / 点击 Logo」等主动离开场景：不走返回栈，直接清空（视为放弃返回点）。
+    func exitTrashView() {
+        guard isTrashViewActive else { return }
+        isTrashViewActive = false
+        browseStack.removeAll()
+        Task { await refreshPhotos() }
+    }
+
+    // MARK: - 浏览上下文返回栈
+
+    /// 推入当前浏览位置快照。在进入「相似照片」「废片篓」等特殊相册前调用。
+    /// - Parameters:
+    ///   - viewerPhotoID: 若查看器当前打开，传入正在查看的照片 ID；返回时会重新打开其详情。
+    ///   - anchorPhotoID: 返回时照片墙应滚动回到的照片 ID（一般是当前可见的第一张）。
+    private func pushBrowseContext(viewerPhotoID: String?, anchorPhotoID: String?) {
+        browseStack.append(
+            BrowseContext(
+                filter: searchFilter,
+                isTrashViewActive: isTrashViewActive,
+                isSimilarMode: isSimilarMode,
+                results: photoResults,
+                matchedCount: matchedPhotoCount,
+                viewerPhotoID: viewerPhotoID,
+                anchorPhotoID: anchorPhotoID
+            )
+        )
+    }
+
+    /// 返回到进入「特殊相册」之前的位置：还原筛选结果、计数与模式，
+    /// 并通过 `pendingScrollAnchorID` / 重新打开查看器恢复"上一次定位"。
+    ///
+    /// 栈为空时（如非正常路径直接进入）回退到简单退出，保证「返回」始终可用。
+    func goBack() {
+        guard let context = browseStack.popLast() else {
+            if isSimilarMode {
+                Task { await refreshPhotos() }
+            } else if isTrashViewActive {
+                isTrashViewActive = false
+                Task { await refreshPhotos() }
+            }
+            return
+        }
+
+        searchFilter = context.filter
+        isTrashViewActive = context.isTrashViewActive
+        isSimilarMode = context.isSimilarMode
+        photoResults = context.results
+        matchedPhotoCount = context.matchedCount
+        pendingScrollAnchorID = context.anchorPhotoID
+
+        if let viewerPhotoID = context.viewerPhotoID,
+           let match = context.results.first(where: { $0.id == viewerPhotoID }) {
+            openViewer(for: match)
+        }
+    }
+
     func refreshPhotos(limit: Int? = nil) async {
         guard let databaseQueue else { return }
         isSimilarMode = false
-        let filter = searchFilter
+        let filter = effectiveFilter
         let limit = limit ?? photoPageSize
         isRefreshingPhotos = true
         defer { isRefreshingPhotos = false }
@@ -297,7 +404,7 @@ final class PhotoLibraryViewModel {
 
     func loadMorePhotosIfNeeded() {
         guard !isRefreshingPhotos, !isLoadingMorePhotos, photoResults.count < matchedPhotoCount, let databaseQueue else { return }
-        let filter = searchFilter
+        let filter = effectiveFilter
         let offset = photoResults.count
         isLoadingMorePhotos = true
 
@@ -325,7 +432,7 @@ final class PhotoLibraryViewModel {
     /// 当前筛选条件命中的全部照片 ID。
     func matchedPhotoIDs() throws -> [String] {
         guard let databaseQueue else { return [] }
-        return try SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs).searchIDs(filter: searchFilter)
+        return try SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs).searchIDs(filter: effectiveFilter)
     }
 
     // MARK: - 查看器
@@ -350,13 +457,21 @@ final class PhotoLibraryViewModel {
         }.value
     }
 
+    /// 「相似照片」相似度阈值：只展示相关性较高的结果（余弦相似度，越大越相似）。
+    /// 不设数量上限——结果数量完全由阈值决定，按相似度从高到低排序。
+    /// `nonisolated`：纯常量，需在 `Task.detached`（非主 actor）闭包内直接访问，
+    /// 否则因 `@MainActor` 隔离要求 `await`（"Expression is 'async' but is not marked with 'await'"）。
+    nonisolated static let similarPhotoMinScore: Float = 0.65
+    /// KNN 候选池上限（sqlite-vec 需显式 k；远大于实际命中数，practically 相当于不设上限）。
+    private nonisolated static let similarPhotoCandidatePoolSize = 2000
+
     /// 以指定照片为查询做向量相似检索，结果替换照片墙（语义搜索：以图搜图）。
+    /// 只保留相似度 ≥ `similarPhotoMinScore` 的结果，按相似度从高到低排序，不设数量上限。
     func searchSimilar(to result: PhotoSearchResult, spaceKey: String) {
         guard let databaseQueue else { return }
         let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
         let search = SearchRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
         let queryID = result.id
-        closeViewer()
         Task {
             do {
                 let query = try await Task.detached(priority: .userInitiated) {
@@ -367,14 +482,35 @@ final class PhotoLibraryViewModel {
                     return
                 }
                 let matches = try await Task.detached(priority: .userInitiated) {
-                    try repository.nearest(to: query, spaceKey: spaceKey, limit: 200, excluding: queryID)
+                    try repository.nearest(
+                        to: query,
+                        spaceKey: spaceKey,
+                        limit: Self.similarPhotoCandidatePoolSize,
+                        minScore: Self.similarPhotoMinScore,
+                        excluding: queryID
+                    )
                 }.value
+                let scoreByID = Dictionary(uniqueKeysWithValues: matches.map { ($0.photoID, Double($0.score)) })
                 let ids = matches.map(\.photoID)
                 let results = try await Task.detached(priority: .userInitiated) {
                     try search.results(forIDs: ids)
                 }.value
-                photoResults = results
-                matchedPhotoCount = results.count
+                // 基准照片本身置顶展示（标记 isReferencePhoto，缩略图角标展示「原图」而非相似度）。
+                var referenceItem = result
+                referenceItem.similarityScore = nil
+                referenceItem.isReferencePhoto = true
+                let similarItems = results.map { item in
+                    var item = item
+                    item.similarityScore = scoreByID[item.id]
+                    item.isReferencePhoto = false
+                    return item
+                }
+
+                // 记录返回点：返回时重新打开基准照片的详情，并把照片墙滚动回它所在位置。
+                pushBrowseContext(viewerPhotoID: queryID, anchorPhotoID: queryID)
+                closeViewer()
+                photoResults = [referenceItem] + similarItems
+                matchedPhotoCount = photoResults.count
                 isSimilarMode = true
             } catch {
                 lastErrorMessage = error.localizedDescription
@@ -408,7 +544,9 @@ final class PhotoLibraryViewModel {
     }
 
     /// 退出相似照片模式，恢复正常筛选结果。
+    /// 用于「清除」按钮等主动离开场景：不走返回栈，直接清空（视为放弃返回点）。
     func exitSimilarMode() {
+        browseStack.removeAll()
         Task { await refreshPhotos() }
     }
 
@@ -463,12 +601,21 @@ final class PhotoLibraryViewModel {
         }
     }
 
-    /// 高频标签（供 Find 标签筛选展示）。
-    func topTags() async -> [PhotoTagOption] {
+    /// 高频标签（供 Find 标签筛选展示）。`limit` 传 -1 表示取全量（用于「更多」展开）。
+    func topTags(limit: Int = -1) async -> [PhotoTagOption] {
         guard let databaseQueue else { return [] }
         let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
         return (try? await Task.detached(priority: .userInitiated) {
-            try repository.topTags(limit: 40)
+            try repository.topTags(limit: limit)
+        }.value) ?? []
+    }
+
+    /// 高频地点 / 城市（供 Find 地点筛选展示）。`limit` 传 -1 表示取全量（用于「更多」展开）。
+    func topLocations(limit: Int = -1) async -> [PhotoLocationOption] {
+        guard let databaseQueue else { return [] }
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        return (try? await Task.detached(priority: .userInitiated) {
+            try repository.topLocalities(limit: limit)
         }.value) ?? []
     }
 
@@ -586,4 +733,25 @@ public struct PhotoExtraDetail: Sendable, Equatable {
     public var isRaw: Bool
 
     public static let empty = PhotoExtraDetail(place: nil, tags: [], isRaw: false)
+}
+
+/// 浏览上下文快照（"返回上一次位置"的核心抽象）。
+///
+/// 进入「相似照片」「废片篓」等具有独立结果集的特殊相册前，把当前的
+/// 筛选条件、结果集、计数、模式、查看器照片、滚动锚点整体打个快照推入栈中；
+/// 点击「返回」时弹出栈顶并原样还原——相当于把这些特殊相册当成「带前置筛选条件
+/// 的临时相册」，离开时回到进入前那一帧。
+///
+/// 未来新增「智能筛选相册」「相册详情」等同类页面时，复用同一套
+/// `pushBrowseContext` / `goBack` 即可获得一致的返回体验，无需各自实现。
+public struct BrowseContext: Sendable {
+    var filter: SearchFilterState
+    var isTrashViewActive: Bool
+    var isSimilarMode: Bool
+    var results: [PhotoSearchResult]
+    var matchedCount: Int
+    /// 进入特殊相册前，查看器中正在查看的照片 ID（若有）；返回时重新打开该照片的详情。
+    var viewerPhotoID: String?
+    /// 返回后照片墙应滚动回到的照片 ID（若有）；用于恢复"上一次定位"。
+    var anchorPhotoID: String?
 }

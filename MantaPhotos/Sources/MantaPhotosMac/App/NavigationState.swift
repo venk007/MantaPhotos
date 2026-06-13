@@ -15,7 +15,12 @@ final class NavigationState {
     var gridLevel: GridLevel = .default
     var badgeMetric: BadgeMetric = .aesthetic
     var isFindOverlayPresented = false
-    var isSidebarExpanded = true
+    /// 侧栏当前展开状态：会随用户操作（点击折叠按钮、打开查找浮层等）随时变化。
+    /// 初始值在 `AppState.loadSettings()` 中按 `sidebarShownOnLaunch` 设置。
+    var isSidebarExpanded = false
+    /// 设置项：App 启动时是否默认展开左侧快捷筛选抽屉。默认关闭——
+    /// 启动即呈现完整照片网格，筛选是「按需唤出」的工具而非常驻界面。
+    var sidebarShownOnLaunch = false
     /// 当前选用的向量模型 key（语义/相似搜索与向量索引任务用）。
     var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
 

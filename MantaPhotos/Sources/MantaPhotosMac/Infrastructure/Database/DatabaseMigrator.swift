@@ -50,8 +50,40 @@ public struct DatabaseMigrator {
         Migration(version: 3, name: "p0_p1_schema_expansion", sql: p0P1SchemaExpansionSQL),
         Migration(version: 4, name: "drop_thumbnail_cache_index", sql: dropThumbnailCacheIndexSQL),
         Migration(version: 5, name: "multi_photo_source", sql: multiPhotoSourceSQL),
-        Migration(version: 6, name: "p2_embeddings_and_type", sql: p2EmbeddingsAndTypeSQL)
+        Migration(version: 6, name: "p2_embeddings_and_type", sql: p2EmbeddingsAndTypeSQL),
+        Migration(version: 7, name: "geo_coord_clusters", sql: geoCoordClustersSQL)
     ]
+
+    // M2 逆地理聚类重构：坐标网格聚类去重 + photo_locations 增列（聚类引用 / geohash / 海拔）。
+    // 设计要点见 doc/三大功能重构设计.md §3.2 / §5。
+    // - coord_clusters 是实际发起 MKReverseGeocodingRequest 的对象（同一 ~100m 网格只反查一次）；
+    // - 海拔为每张照片属性（同网格不同照片海拔不同），故存 photo_locations 而非聚类。
+    private static let geoCoordClustersSQL =
+        """
+        create table if not exists coord_clusters (
+          id integer primary key,
+          grid_lat real not null,
+          grid_lon real not null,
+          country text,
+          country_code text,
+          admin1 text,
+          city text,
+          place_name text,
+          status text not null default 'pending',
+          retry_count integer not null default 0,
+          last_attempt text,
+          updated_at text not null,
+          unique(grid_lat, grid_lon)
+        );
+        create index if not exists idx_coord_clusters_status on coord_clusters(status);
+
+        alter table photo_locations add column cluster_id integer references coord_clusters(id);
+        alter table photo_locations add column geohash text;
+        alter table photo_locations add column altitude real;
+
+        create index if not exists idx_photo_locations_cluster on photo_locations(cluster_id);
+        create index if not exists idx_photo_locations_geohash on photo_locations(geohash);
+        """
 
     // P2：向量空间 + 嵌入存储 + 类型(RAW)。
     // 设计要点：不同模型向量长度不同 → 用单表 photo_embeddings + space_id 区分，

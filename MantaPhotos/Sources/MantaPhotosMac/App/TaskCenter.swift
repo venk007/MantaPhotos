@@ -18,6 +18,8 @@ final class TaskCenter {
     var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
     /// 反向地理编码 / 分析结果使用的 locale（默认跟随系统，随应用语言更新）。
     var localeIdentifier: String = Locale.autoupdatingCurrent.identifier
+    /// 当前可访问的照片源集合：分析任务只对这些源的照片排队 / 计数。nil = 不限制。
+    var accessibleSourceIDs: Set<String>?
 
     @ObservationIgnored private let maxConcurrent = 2
     @ObservationIgnored private let batchSize = 24
@@ -61,9 +63,10 @@ final class TaskCenter {
     func refreshCompletion() {
         guard let databaseQueue else { return }
         let key = vectorModelKey
+        let accessible = accessibleSourceIDs
         Task {
             let snapshot = await Task.detached(priority: .utility) { () -> [AnalysisKind: Int] in
-                let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+                let repository = AnalysisDataRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessible)
                 let total = (try? repository.totalPhotoCount()) ?? 0
                 func percent(_ pending: Int) -> Int {
                     total <= 0 ? 0 : max(0, min(100, Int((Double(total - pending) / Double(total) * 100).rounded())))
@@ -221,10 +224,10 @@ final class TaskCenter {
 
     private func makeProcessor(_ kind: AnalysisKind) -> PhotoAnalysisProcessor? {
         guard let databaseQueue else { return nil }
-        let repository = AnalysisDataRepository(databaseQueue: databaseQueue)
+        let repository = AnalysisDataRepository(databaseQueue: databaseQueue, accessibleSourceIDs: accessibleSourceIDs)
         switch kind {
         case .tagging:
-            return TaggingProcessor(repository: repository)
+            return TaggingProcessor(repository: repository, localeIdentifier: localeIdentifier)
         case .geocoding:
             return GeocodingProcessor(repository: repository, localeIdentifier: localeIdentifier)
         case .typeAnalysis:

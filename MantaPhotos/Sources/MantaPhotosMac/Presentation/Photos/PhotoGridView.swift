@@ -470,8 +470,11 @@ final class PhotoGridItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("PhotoGridItem")
 
     private let thumbnailView = NSView()
+    private let scoreBadge = NSVisualEffectView()
+    private let scoreGradient = CAGradientLayer()
     private let scoreLabel = NSTextField(labelWithString: "")
     private let mediaBadge = NSTextField(labelWithString: "")
+    private let similarityLabel = NSTextField(labelWithString: "")
     private let selectionRing = CALayer()
     private var thumbnailToken: ThumbnailRequestToken?
 
@@ -489,13 +492,24 @@ final class PhotoGridItem: NSCollectionViewItem {
         thumbnailView.layer?.contentsGravity = .resizeAspectFill
         thumbnailView.layer?.masksToBounds = true
 
+        // 评分角标：液态玻璃底（系统材质模糊 + 半透明）+ 分数区间色的左→右渐变叠色；
+        // 文字用约束在玻璃容器内水平/垂直双向居中，不再依赖文本框自身背景。
+        scoreBadge.translatesAutoresizingMaskIntoConstraints = false
+        scoreBadge.material = .hudWindow
+        scoreBadge.blendingMode = .withinWindow
+        scoreBadge.state = .active
+        scoreBadge.wantsLayer = true
+        scoreBadge.layer?.cornerRadius = 11
+        scoreBadge.layer?.masksToBounds = true
+        scoreBadge.layer?.addSublayer(scoreGradient)
+        scoreGradient.startPoint = CGPoint(x: 0, y: 0.5)
+        scoreGradient.endPoint = CGPoint(x: 1, y: 0.5)
+
         scoreLabel.translatesAutoresizingMaskIntoConstraints = false
         scoreLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         scoreLabel.textColor = .white
         scoreLabel.alignment = .center
-        scoreLabel.wantsLayer = true
-        scoreLabel.layer?.cornerRadius = 10
-        scoreLabel.layer?.masksToBounds = true
+        scoreLabel.drawsBackground = false
 
         mediaBadge.translatesAutoresizingMaskIntoConstraints = false
         mediaBadge.font = .systemFont(ofSize: 10, weight: .semibold)
@@ -506,13 +520,26 @@ final class PhotoGridItem: NSCollectionViewItem {
         mediaBadge.layer?.masksToBounds = true
         mediaBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
 
+        // 「相似照片」结果的相似度角标：右下角，仅相似模式下有值时显示。
+        similarityLabel.translatesAutoresizingMaskIntoConstraints = false
+        similarityLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        similarityLabel.textColor = .white
+        similarityLabel.alignment = .center
+        similarityLabel.wantsLayer = true
+        similarityLabel.layer?.cornerRadius = 8
+        similarityLabel.layer?.masksToBounds = true
+        similarityLabel.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.78).cgColor
+        similarityLabel.isHidden = true
+
         selectionRing.borderWidth = 0
         selectionRing.borderColor = NSColor.controlAccentColor.cgColor
         selectionRing.cornerRadius = 0
 
         view.addSubview(thumbnailView)
-        view.addSubview(scoreLabel)
+        view.addSubview(scoreBadge)
+        scoreBadge.addSubview(scoreLabel)
         view.addSubview(mediaBadge)
+        view.addSubview(similarityLabel)
         view.layer?.addSublayer(selectionRing)
 
         NSLayoutConstraint.activate([
@@ -521,21 +548,33 @@ final class PhotoGridItem: NSCollectionViewItem {
             thumbnailView.topAnchor.constraint(equalTo: view.topAnchor),
             thumbnailView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            scoreLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            scoreLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            scoreLabel.heightAnchor.constraint(equalToConstant: 22),
-            scoreLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
+            scoreBadge.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            scoreBadge.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            scoreBadge.heightAnchor.constraint(equalToConstant: 22),
+            scoreBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
+
+            // 文字在玻璃容器内水平 + 垂直双向居中；两侧留出最小内边距防止贴边。
+            scoreLabel.centerXAnchor.constraint(equalTo: scoreBadge.centerXAnchor),
+            scoreLabel.centerYAnchor.constraint(equalTo: scoreBadge.centerYAnchor),
+            scoreLabel.leadingAnchor.constraint(greaterThanOrEqualTo: scoreBadge.leadingAnchor, constant: 6),
+            scoreLabel.trailingAnchor.constraint(lessThanOrEqualTo: scoreBadge.trailingAnchor, constant: -6),
 
             mediaBadge.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
             mediaBadge.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
             mediaBadge.heightAnchor.constraint(equalToConstant: 18),
-            mediaBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 42)
+            mediaBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
+
+            similarityLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            similarityLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+            similarityLabel.heightAnchor.constraint(equalToConstant: 20),
+            similarityLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
     }
 
     override func viewDidLayout() {
         super.viewDidLayout()
         selectionRing.frame = view.bounds.insetBy(dx: 1.5, dy: 1.5)
+        scoreGradient.frame = scoreBadge.bounds
     }
 
     override func prepareForReuse() {
@@ -543,6 +582,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         PhotoThumbnailProvider.shared.cancel(thumbnailToken)
         thumbnailToken = nil
         thumbnailView.layer?.contents = nil
+        similarityLabel.isHidden = true
         representedObject = nil
     }
 
@@ -558,6 +598,7 @@ final class PhotoGridItem: NSCollectionViewItem {
 
         configureScore(result: result, badgeMetric: badgeMetric)
         configureMediaBadge(result.asset.mediaType)
+        configureSimilarity(result: result)
 
         thumbnailToken = PhotoThumbnailProvider.shared.requestThumbnail(
             for: result.asset,
@@ -590,13 +631,30 @@ final class PhotoGridItem: NSCollectionViewItem {
         }
 
         guard let score else {
-            scoreLabel.isHidden = true
+            scoreBadge.isHidden = true
             return
         }
 
-        scoreLabel.isHidden = false
+        scoreBadge.isHidden = false
         scoreLabel.stringValue = "\(Int(score.rounded()))"
-        scoreLabel.layer?.backgroundColor = scoreColor(score).cgColor
+        // 主题色按分数区间保持不变（仍由 scoreColor 决定色相）；
+        // 渐变仅在左右两端使用不同透明度，呈现液态玻璃的半透明 + 渐变质感。
+        let tint = scoreColor(score)
+        scoreGradient.colors = [
+            tint.withAlphaComponent(0.85).cgColor,
+            tint.withAlphaComponent(0.32).cgColor
+        ]
+    }
+
+    /// 「相似照片」右下角置信度角标：仅 `similarityScore` 非 nil 时显示（即处于相似模式且通过阈值）。
+    private func configureSimilarity(result: PhotoSearchResult) {
+        guard let score = result.similarityScore else {
+            similarityLabel.isHidden = true
+            return
+        }
+        similarityLabel.isHidden = false
+        let percent = Int((score * 100).rounded())
+        similarityLabel.stringValue = "\(percent)%"
     }
 
     private func configureMediaBadge(_ mediaType: MediaType) {

@@ -35,19 +35,29 @@ final class AppState {
             let queue = try await bootstrapper.bootstrap(databaseURL: databaseURL)
             databaseQueue = queue
             VectorIndexEnvironment.probe(queue)
+            // M1：向量存储格式升级（cosine + L2 归一化）时一次性清空旧向量，
+            // 由开机自启的向量索引任务用新格式重建。
+            try? AnalysisDataRepository(databaseQueue: queue).migrateVectorFormatIfNeeded()
+            // #4：标签格式升级（阈值 + 本地化）→ 清理旧标签数据并触发重跑（地点标签无网络回填）。
+            try? AnalysisDataRepository(databaseQueue: queue).migrateTagFormatIfNeeded()
             library.attach(databaseQueue: queue)
             analysis.attach(databaseQueue: queue, library: library)
             try loadSettings()
-            registerPersistedCustomVectorModel(databaseQueue: queue)
-            // 加载并注册所有照片源（系统 + 本地），解析本地源安全作用域书签。
-            library.loadAndRegisterSources()
-            // 多任务中心：注入依赖 + 当前向量模型 / 语言，随后开机自启待处理任务。
             tasks.attach(databaseQueue: queue, library: library, analysis: analysis)
-            tasks.vectorModelKey = navigation.vectorModelKey
             tasks.localeIdentifier = navigation.appLanguage.locale.identifier
+            // 先让界面可交互；其后的 await 都把书签解析 / 可用性探测放后台，不阻塞主线程 run loop
+            // （外置卷弹出后，主线程同步解析安全作用域书签会长时间阻塞，曾导致主界面卡死）。
             bootstrapStatus = .ready
+            await registerPersistedCustomVectorModel(databaseQueue: queue)
+            // 加载并注册所有照片源（系统 + 本地），后台解析书签 + 判定可用性，只注册可访问源。
+            await library.loadAndRegisterSources()
+            tasks.vectorModelKey = navigation.vectorModelKey
+            // 分析任务只对当前可访问源排队 / 计数（不可访问源不进入队列，避免状态异常）。
+            tasks.accessibleSourceIDs = library.accessibleSourceIDs
+            // 仅展示当前可访问源的内容。
             await library.refreshPhotos()
-            library.startInitialImportIfPossible()
+            // 启动即自动加载所有可访问源（系统图库 + 本地目录），无需手动点击导入。
+            library.startAccessibleSourceImports()
             tasks.startAllPending()
         } catch {
             bootstrapStatus = .failed(error.localizedDescription)
@@ -149,17 +159,24 @@ final class AppState {
         return missing
     }
 
-    private func registerPersistedCustomVectorModel(databaseQueue: DatabaseQueue) {
+    /// 注册持久化的自定义向量模型目录。书签解析放后台并做路径可达性门：
+    /// 模型目录在已弹出的外置卷上时，主线程同步 `resolvingBookmarkData` 会长时间阻塞 → 卡死。
+    private func registerPersistedCustomVectorModel(databaseQueue: DatabaseQueue) async {
         guard let config = try? AppSettingsRepository(databaseQueue: databaseQueue).loadCustomVectorModel() else { return }
-        var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: config.bookmark,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else { return }
-        _ = url.startAccessingSecurityScopedResource()
-        EmbeddingProviderRegistry.registerCustom(config: config, resolvedURL: url)
+        let resolved = await Task.detached(priority: .userInitiated) { () -> URL? in
+            // 快速门：路径不可达（卷已弹出 / 目录被删）→ 跳过会阻塞的书签解析。
+            if !config.path.isEmpty, !FileManager.default.fileExists(atPath: config.path) { return nil }
+            var isStale = false
+            guard let url = try? URL(
+                resolvingBookmarkData: config.bookmark,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ), url.startAccessingSecurityScopedResource() else { return nil }
+            return url
+        }.value
+        guard let resolved else { return }
+        EmbeddingProviderRegistry.registerCustom(config: config, resolvedURL: resolved)
     }
 
     /// 尝试从模型目录 config.json 读取向量维度。
@@ -186,7 +203,8 @@ final class AppState {
                     appLanguage: navigation.appLanguage,
                     gridLevel: navigation.gridLevel,
                     badgeMetric: navigation.badgeMetric,
-                    vectorModelKey: navigation.vectorModelKey
+                    vectorModelKey: navigation.vectorModelKey,
+                    sidebarShownOnLaunch: navigation.sidebarShownOnLaunch
                 )
             )
         } catch {
@@ -202,6 +220,10 @@ final class AppState {
         navigation.gridLevel = snapshot.gridLevel
         navigation.badgeMetric = snapshot.badgeMetric
         navigation.vectorModelKey = snapshot.vectorModelKey
+        navigation.sidebarShownOnLaunch = snapshot.sidebarShownOnLaunch
+        // 侧栏的初始展开状态由「启动时显示」设置决定；之后用户随时可手动展开/折叠，
+        // 不会回写到这个设置项（设置项只代表「下次启动时」的默认值）。
+        navigation.isSidebarExpanded = snapshot.sidebarShownOnLaunch
     }
 }
 

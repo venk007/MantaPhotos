@@ -16,7 +16,7 @@
 		78FAE064E08CAFDBD6457EA9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8DBBC406B9966D14482394BC /* MantaPhotos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MantaPhotos; path = .; sourceTree = SOURCE_ROOT; };
 		AB893FC67F9B5F333E677E5D /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		F91D9536148D05F5B8DF1F2E /* MantaPhotosMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MantaPhotosMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F91D9536148D05F5B8DF1F2E /* MantaPhotosMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = MantaPhotosMac.app; path = MantaPhotos.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,7 +163,7 @@
 				CODE_SIGN_ENTITLEMENTS = Xcode/MantaPhotosMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -174,7 +174,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.16;
+				MARKETING_VERSION = 0.0.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mantaphotos.mac;
 				PRODUCT_NAME = MantaPhotos;
 				SDKROOT = macosx;
@@ -309,7 +309,7 @@
 				CODE_SIGN_ENTITLEMENTS = Xcode/MantaPhotosMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -320,7 +320,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.0.16;
+				MARKETING_VERSION = 0.0.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mantaphotos.mac;
 				PRODUCT_NAME = MantaPhotos;
 				SDKROOT = macosx;

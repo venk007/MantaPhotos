@@ -21,7 +21,8 @@ struct AppSettingsRepository: Sendable {
                 appLanguage: AppLanguage(rawValue: values["appearance.language"] ?? "") ?? .system,
                 gridLevel: GridLevel(rawValue: Int(values["photos.gridLevel"] ?? "") ?? GridLevel.default.rawValue) ?? .default,
                 badgeMetric: BadgeMetric(rawValue: values["photos.badgeMetric"] ?? "") ?? .aesthetic,
-                vectorModelKey: values["analysis.vectorModel"] ?? EmbeddingProviderRegistry.defaultKey
+                vectorModelKey: values["analysis.vectorModel"] ?? EmbeddingProviderRegistry.defaultKey,
+                sidebarShownOnLaunch: values["photos.sidebarShownOnLaunch"] == "1"
             )
         }
     }
@@ -34,7 +35,8 @@ struct AppSettingsRepository: Sendable {
                 ("appearance.language", snapshot.appLanguage.rawValue),
                 ("photos.gridLevel", "\(snapshot.gridLevel.rawValue)"),
                 ("photos.badgeMetric", snapshot.badgeMetric.rawValue),
-                ("analysis.vectorModel", snapshot.vectorModelKey)
+                ("analysis.vectorModel", snapshot.vectorModelKey),
+                ("photos.sidebarShownOnLaunch", snapshot.sidebarShownOnLaunch ? "1" : "0")
             ]
 
             for (key, value) in values {
@@ -95,4 +97,6 @@ struct AppSettingsSnapshot: Equatable, Sendable {
     var gridLevel: GridLevel
     var badgeMetric: BadgeMetric
     var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
+    /// App 启动时是否默认展开左侧快捷筛选抽屉。
+    var sidebarShownOnLaunch: Bool = false
 }

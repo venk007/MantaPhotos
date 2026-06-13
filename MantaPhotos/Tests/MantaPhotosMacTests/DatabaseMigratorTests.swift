@@ -37,7 +37,7 @@ struct DatabaseMigratorTests {
             )
         }
 
-        #expect(migrationCount == 6)
+        #expect(migrationCount == 7)
         #expect(schemaChecks.modelCount == 1)
         #expect(schemaChecks.deviceCategoryCount == 1)
         #expect(schemaChecks.reportTableCount == 1)

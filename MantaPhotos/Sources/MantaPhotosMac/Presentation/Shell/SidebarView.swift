@@ -2,14 +2,24 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
-    @State private var peopleQuery = ""
     @State private var tagQuery = ""
     @State private var showsAllTagOptions = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                sidebarSection(appState.localized("Type"), clear: clearType) {
+                if !appState.library.searchFilter.isEmpty {
+                    Button {
+                        appState.library.searchFilter = SearchFilterState()
+                    } label: {
+                        Label(appState.localized("Clear Filters"), systemImage: "xmark.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
+                }
+
+                sidebarSection(appState.localized("Type"), isActive: isTypeActive, clear: clearType) {
                     chipRow {
                         filterChip(appState.localized("Photos"), icon: "photo", active: appState.library.searchFilter.mediaTypes == [.image]) {
                             toggleSingleMediaType(.image)
@@ -27,7 +37,7 @@ struct SidebarView: View {
                     }
                 }
 
-                sidebarSection(appState.localized("Score"), clear: clearScore) {
+                sidebarSection(appState.localized("Score"), isActive: isScoreActive, clear: clearScore) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.aperture")
@@ -35,48 +45,38 @@ struct SidebarView: View {
                             Text(appState.localized("Aesthetic"))
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            HStack(spacing: 2) {
-                                scoreOperatorButton(">", active: scoreOperator == .greaterThan) {
-                                    scoreOperator = .greaterThan
-                                }
-                                scoreOperatorButton("<", active: scoreOperator == .lessThan) {
-                                    scoreOperator = .lessThan
-                                }
-                            }
                             Spacer()
-                            Text("\(Int(currentScoreValue.rounded()))")
-                                .font(.caption.monospacedDigit())
-                                .frame(width: 28, alignment: .trailing)
+                            if let summary = appState.library.searchFilter.scoreFilterSummaryCompact(localizer: appState.localized) {
+                                Text(summary)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         HStack(spacing: 8) {
                             Text("0")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                            Slider(
-                                value: scoreValue,
-                                in: 0...100,
-                                step: 1
-                            )
+                            RangeSliderView(lowerValue: lowerScoreValue, upperValue: upperScoreValue)
                             Text("100")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
 
+                        // 高分照片 / 低分照片 快捷筛选：与详情页的“四档评分”阈值呼应（高档 ≥80，低档 <40）。
+                        // 单选语义：再点一次同一项即清空（与类型/来源等其余分区的快捷筛选一致）。
                         chipRow {
-                            filterChip(appState.localized("High"), icon: "sparkles", active: appState.library.searchFilter.minimumAestheticScore == 80) {
-                                appState.library.searchFilter.minimumAestheticScore = appState.library.searchFilter.minimumAestheticScore == 80 ? nil : 80
-                                appState.library.searchFilter.maximumAestheticScore = nil
+                            filterChip(appState.localized("High Score Photos"), icon: "star.fill", active: isHighScoreQuickFilterActive) {
+                                toggleHighScoreQuickFilter()
                             }
-                            filterChip(appState.localized("Low"), icon: "chart.line.downtrend.xyaxis", active: appState.library.searchFilter.maximumAestheticScore == 40) {
-                                appState.library.searchFilter.maximumAestheticScore = appState.library.searchFilter.maximumAestheticScore == 40 ? nil : 40
-                                appState.library.searchFilter.minimumAestheticScore = nil
+                            filterChip(appState.localized("Low Score Photos"), icon: "arrow.down.right", active: isLowScoreQuickFilterActive) {
+                                toggleLowScoreQuickFilter()
                             }
                         }
                     }
                 }
 
-                sidebarSection(appState.localized("Time"), clear: clearTime) {
+                sidebarSection(appState.localized("Time"), isActive: isTimeActive, clear: clearTime) {
                     chipRow {
                         filterChip(appState.localized("Today"), icon: "sun.max", active: isToday) {
                             setToday()
@@ -99,40 +99,33 @@ struct SidebarView: View {
                     }
                 }
 
-                sidebarSection(appState.localized("Status"), clear: clearStatus) {
+                sidebarSection(appState.localized("Status"), isActive: isStatusActive, clear: clearStatus) {
                     VStack(alignment: .leading, spacing: 6) {
                         sidebarItem(appState.localized("Favorites"), icon: "heart", active: appState.library.searchFilter.favoritesOnly) {
                             appState.library.searchFilter.favoritesOnly.toggle()
                         }
                         sidebarItem(appState.localized("Duplicate"), icon: "doc.on.doc", active: false) {}
                             .disabled(true)
-                        sidebarItem(appState.localized("Trash"), icon: "trash", active: appState.library.searchFilter.inTrash == true) {
-                            appState.library.searchFilter.inTrash = appState.library.searchFilter.inTrash == true ? false : true
+                        sidebarItem(appState.localized("Trash"), icon: "trash", active: appState.library.isTrashViewActive) {
+                            appState.library.toggleTrashView()
                         }
                     }
                 }
 
-                sidebarSection(appState.localized("Source"), clear: clearDeviceSource) {
+                sidebarSection(appState.localized("Source"), isActive: isSourceActive, clear: clearDeviceSource) {
+                    // 两排各 3 项：第一排 手机 / 卡片机 / 单反相机，第二排 运动相机 / 无人机 / 截屏。
+                    // 单反相机排到运动相机之前，符合「先常规设备、后特殊设备」的顺序直觉。
                     chipRow {
                         sourceChip(.phone, icon: "iphone")
                         sourceChip(.pocket, icon: "camera.viewfinder")
+                        sourceChip(.camera, icon: "camera")
                         sourceChip(.actionCamera, icon: "figure.run")
                         sourceChip(.drone, icon: "airplane")
-                        sourceChip(.camera, icon: "camera")
                         sourceChip(.screenshot, icon: "rectangle.on.rectangle")
                     }
                 }
 
-                sidebarSection(appState.localized("People"), clear: {}) {
-                    TextField(appState.localized("Search people"), text: $peopleQuery)
-                        .textFieldStyle(.roundedBorder)
-                    chipRow {
-                        disabledChip(appState.localized("Family"), icon: "person.2")
-                        disabledChip(appState.localized("Friends"), icon: "person.3")
-                    }
-                }
-
-                sidebarSection(appState.localized("Tags"), clear: {}) {
+                sidebarSection(appState.localized("Tags"), isActive: false, clear: {}) {
                     TextField(appState.localized("Search tags"), text: $tagQuery)
                         .textFieldStyle(.roundedBorder)
                     chipRow {
@@ -145,13 +138,6 @@ struct SidebarView: View {
                     }
                 }
 
-                Button {
-                    appState.library.searchFilter = SearchFilterState()
-                } label: {
-                    Label(appState.localized("Clear Filters"), systemImage: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
             .padding(16)
         }
@@ -159,6 +145,7 @@ struct SidebarView: View {
 
     private func sidebarSection<Content: View>(
         _ title: String,
+        isActive: Bool,
         clear: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -168,13 +155,23 @@ struct SidebarView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button {
-                    clear()
-                } label: {
-                    Image(systemName: "xmark")
+                if isActive {
+                    Button {
+                        clear()
+                    } label: {
+                        // 显式给图标按钮一个固定的可点击区域 + `contentShape`：
+                        // SF Symbol 字形本身的可见区域很小且不规则，纯 `Image` 作为
+                        // `.borderless` 按钮的 label 时，命中区域会收缩到字形实际像素，
+                        // 叠加 `glassHoverHighlight` 的 `scaleEffect` 后命中区域与可见
+                        // 高光进一步错位，导致「看起来在按钮上，点击却无效」。
+                        Image(systemName: "xmark")
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .glassHoverHighlight(in: Circle())
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
             content()
         }
@@ -201,17 +198,6 @@ struct SidebarView: View {
         .buttonStyle(.plain)
     }
 
-    private func scoreOperatorButton(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption.weight(.bold))
-                .frame(width: 24, height: 20)
-                .foregroundStyle(active ? .white : .secondary)
-                .background(active ? AnyShapeStyle(DesignSystem.Glass.activeTint) : AnyShapeStyle(.quaternary), in: RoundedRectangle(cornerRadius: DesignSystem.Radius.control))
-        }
-        .buttonStyle(.plain)
-    }
-
     private func sourceChip(_ category: DeviceCategory, icon: String) -> some View {
         filterChip(
             appState.localized(sourceTitle(category)),
@@ -234,7 +220,7 @@ struct SidebarView: View {
         case .pocket: "Pocket"
         case .actionCamera: "Action Cam"
         case .drone: "Drone"
-        case .camera: "Camera"
+        case .camera: "SLR Camera"
         case .screenshot: "Screenshot"
         case .unknown: "Unknown"
         }
@@ -269,42 +255,60 @@ struct SidebarView: View {
         appState.library.searchFilter.mediaTypes = appState.library.searchFilter.mediaTypes == [mediaType] ? [] : [mediaType]
     }
 
-    private var scoreOperator: SidebarScoreOperator {
-        get {
-            appState.library.searchFilter.maximumAestheticScore == nil ? .greaterThan : .lessThan
-        }
-        nonmutating set {
-            let value = currentScoreValue
-            if newValue == .greaterThan {
-                appState.library.searchFilter.minimumAestheticScore = value <= 1 ? nil : value
-                appState.library.searchFilter.maximumAestheticScore = nil
-            } else {
-                appState.library.searchFilter.maximumAestheticScore = value <= 1 ? nil : value
-                appState.library.searchFilter.minimumAestheticScore = nil
-            }
-        }
-    }
-
-    private var scoreValue: Binding<Double> {
+    private var lowerScoreValue: Binding<Double> {
         Binding(
-            get: { currentScoreValue },
-            set: { setScoreValue($0.rounded()) }
+            get: { appState.library.searchFilter.minimumAestheticScore ?? 0 },
+            set: { newValue in
+                let clamped = min(max(0, newValue), upperScoreValue.wrappedValue)
+                appState.library.searchFilter.minimumAestheticScore = clamped <= 0 ? nil : clamped
+            }
         )
     }
 
-    private var currentScoreValue: Double {
-        appState.library.searchFilter.maximumAestheticScore ?? appState.library.searchFilter.minimumAestheticScore ?? 0
+    private var upperScoreValue: Binding<Double> {
+        Binding(
+            get: { appState.library.searchFilter.maximumAestheticScore ?? 100 },
+            set: { newValue in
+                let clamped = max(min(100, newValue), lowerScoreValue.wrappedValue)
+                appState.library.searchFilter.maximumAestheticScore = clamped >= 100 ? nil : clamped
+            }
+        )
     }
 
-    private func setScoreValue(_ value: Double) {
-        let normalized = min(100, max(0, value))
-        if scoreOperator == .greaterThan {
-            appState.library.searchFilter.minimumAestheticScore = normalized <= 1 ? nil : normalized
-            appState.library.searchFilter.maximumAestheticScore = nil
-        } else {
-            appState.library.searchFilter.maximumAestheticScore = normalized <= 1 ? nil : normalized
-            appState.library.searchFilter.minimumAestheticScore = nil
-        }
+    private var isHighScoreQuickFilterActive: Bool {
+        appState.library.searchFilter.isHighScoreQuickFilterActive
+    }
+
+    private var isLowScoreQuickFilterActive: Bool {
+        appState.library.searchFilter.isLowScoreQuickFilterActive
+    }
+
+    private func toggleHighScoreQuickFilter() {
+        appState.library.searchFilter.toggleHighScoreQuickFilter()
+    }
+
+    private func toggleLowScoreQuickFilter() {
+        appState.library.searchFilter.toggleLowScoreQuickFilter()
+    }
+
+    private var isScoreActive: Bool {
+        appState.library.searchFilter.minimumAestheticScore != nil || appState.library.searchFilter.maximumAestheticScore != nil
+    }
+
+    private var isTypeActive: Bool {
+        !appState.library.searchFilter.mediaTypes.isEmpty || appState.library.searchFilter.screenshotsOnly
+    }
+
+    private var isTimeActive: Bool {
+        appState.library.searchFilter.createdAfter != nil || appState.library.searchFilter.createdBefore != nil
+    }
+
+    private var isStatusActive: Bool {
+        appState.library.searchFilter.favoritesOnly
+    }
+
+    private var isSourceActive: Bool {
+        !appState.library.searchFilter.deviceCategories.isEmpty
     }
 
     private var visibleTagOptions: [SidebarTagOption] {
@@ -330,7 +334,6 @@ struct SidebarView: View {
     private func clearScore() {
         appState.library.searchFilter.minimumAestheticScore = nil
         appState.library.searchFilter.maximumAestheticScore = nil
-        appState.library.searchFilter.inTrash = false
     }
 
     private func clearTime() {
@@ -341,7 +344,6 @@ struct SidebarView: View {
     private func clearStatus() {
         appState.library.searchFilter.favoritesOnly = false
         appState.library.searchFilter.includeHidden = false
-        appState.library.searchFilter.inTrash = false
     }
 
     private func clearDeviceSource() {
@@ -413,11 +415,6 @@ struct SidebarView: View {
         let end = Calendar.current.date(byAdding: .day, value: 1, to: start)
         return createdAfter == start && appState.library.searchFilter.createdBefore == end
     }
-}
-
-private enum SidebarScoreOperator {
-    case greaterThan
-    case lessThan
 }
 
 private struct SidebarTagOption {

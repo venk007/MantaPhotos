@@ -20,17 +20,13 @@ struct SettingsPageView: View {
                     }
                 }
 
-                Picker(appState.localized("Grid Level"), selection: $navigation.gridLevel) {
-                    ForEach(GridLevel.allCases) { level in
-                        Text("\(appState.localized("Grid Level")) \(level.rawValue)").tag(level)
-                    }
-                }
-
                 Picker(appState.localized("Badge Metric"), selection: $navigation.badgeMetric) {
                     ForEach(BadgeMetric.allCases) { metric in
                         Text(appState.localized(metric.localizationKey)).tag(metric)
                     }
                 }
+
+                Toggle(appState.localized("Show Sidebar On Launch"), isOn: $navigation.sidebarShownOnLaunch)
             }
 
             Section("照片源") {
@@ -168,6 +164,16 @@ struct SettingsPageView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+            }
+
+            if appState.library.sourceAvailability[source.id] == false {
+                Text("不可用")
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.orange.opacity(0.18), in: Capsule())
+                    .foregroundStyle(.orange)
+                    .help("该源当前不可访问（如外置硬盘已弹出或目录被移动 / 删除），其照片暂不显示；接回设备后重启应用即可恢复。")
             }
 
             Spacer()
