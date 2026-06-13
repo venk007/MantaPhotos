@@ -1847,7 +1847,7 @@ P2 保留项（从原 P2）：sqlite-vec 加载降级策略、embedding 断点�
 5. **P2-C 价值高但最难** → 先规则版、后模型版，分两步落地。
 6. **P3-3 含义待澄清**，确认后再排。
 
-### 8.6 P2 实现最终态（2026-06-12，已开发 / 待 Mac 编译验证）
+### 8.6 P2 实现最终态（2026-06-12，已开发；2026-06-13 已完成 Mac 编译验证）
 
 相对 §8.5 计划，P2-A / P2-B 的**实际落地态**与若干偏差如下（以本节为准）：
 
@@ -1870,6 +1870,30 @@ P2-A/P2-B 落地后复盘发现三项与既定设计有偏差，已编制专门�
 - **语义搜索**：先修向量评分一致性 bug（`vec0` 未声明 `distance_metric=cosine`、入库未 L2 归一化、`SQLiteVecIndex.nearest` 返回 `-距离` 与暴力路径余弦相似度口径不一致）；多模态默认模型定为 **MobileCLIP2**（可切 JINA / 后期 Gemma，同时只启用一个），Apple 图像特征向量退为「找相似」专用；补齐 **阈值过滤 + RRF 混合检索 + 重排**。
 
 > 数据库变更集中在 migration 7 = `p3_tagging_geo_semantic`（当前最高 version 6）。开发顺序与决策点见该文档 §7 / §9。
+
+---
+
+### 8.8 2026-06-13 构建基线与工作项最终状态
+
+构建基线已经恢复：`.windowStyle(.hiddenTitleBar)` 作为 `Scene` 修饰器挂在 `WindowGroup`，不再错误地放在 `AppShellView` 的 View 修饰链。以下验证全部通过：
+
+- `swift build`：通过；仅保留 SwiftPM 对 App target `Assets.xcassets` 未作为 package resource 的提示，正式 Xcode target 会正常编译资产。
+- `swift test`：2 个 suite、7 项测试全部通过。
+- `xcodebuild -project MantaPhotos.xcodeproj -scheme MantaPhotosMac -configuration Debug -destination 'platform=macOS' build`：通过，生成并本地签名 `MantaPhotos.app`。
+
+本批工作项状态：
+
+| 工作项 | 状态 | 实现与剩余验证 |
+| --- | --- | --- |
+| 查看器交互加固 | 已开发 / 待手测 | `PhotoViewerView` 只保留 SwiftUI 布局；`PhotoViewerInteropViews` 承载缩放、平移、横滑、Live Photo 和专用键盘第一响应者。需按专项指南验证冷启动首次打开和全部快捷键 |
+| 本地缩略图缓存 | 已开发 / 待手测 | L1 `NSCache` + L2 `DiskThumbnailCache`；160/320/640/1024/2048 档位、SHA-256 key、JPEG、mtime LRU、设置持久化和清理入口均已接通 |
+| Vision 标签本地化 | 已开发 / 已编译 | 当前语言无合适展示名时不落库；中文词表零样本属于下一阶段 M4，不与本次映射层混淆 |
+| M1 向量评分地基 | 已完成 / 已编译 | cosine + L2 归一化 + 旧空间重建路径已通过构建 |
+| M2 逆地理聚类 | 已完成 / 已编译 | 聚类、限流、退避、断点续跑、详情/FTS 回填已通过构建；真实大库请求吞吐待长跑 |
+| M3 标签格式调整 | 已完成 / 已编译 | 内容标签阈值/上限和历史格式迁移已通过构建 |
+| M4/M5/M6 | 未开始 | 依次为中文零样本词表、MobileCLIP2 模型角色拆分、RRF 混合搜索与阈值标定 |
+
+下一开发顺序固定为：先完成查看器与缓存专项手测，再进行 5 万级任务长跑；功能开发按 M4 → M5 → M6 推进。P2-C 完成前，不把当前自定义模型 KNN 入口描述为完整的自然语言混合搜索。
 
 ---
 

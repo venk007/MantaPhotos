@@ -59,6 +59,8 @@ final class AppState {
             // 启动即自动加载所有可访问源（系统图库 + 本地目录），无需手动点击导入。
             library.startAccessibleSourceImports()
             tasks.startAllPending()
+            // 异步检查磁盘缩略图缓存占用，超限时按 LRU 清理（不阻塞首屏）。
+            enforceThumbnailCacheLimitIfNeeded()
         } catch {
             bootstrapStatus = .failed(error.localizedDescription)
         }
@@ -204,7 +206,9 @@ final class AppState {
                     gridLevel: navigation.gridLevel,
                     badgeMetric: navigation.badgeMetric,
                     vectorModelKey: navigation.vectorModelKey,
-                    sidebarShownOnLaunch: navigation.sidebarShownOnLaunch
+                    sidebarShownOnLaunch: navigation.sidebarShownOnLaunch,
+                    thumbnailCacheLimitBytes: navigation.thumbnailCacheLimitBytes,
+                    thumbnailCacheAutoCleanEnabled: navigation.thumbnailCacheAutoCleanEnabled
                 )
             )
         } catch {
@@ -221,9 +225,37 @@ final class AppState {
         navigation.badgeMetric = snapshot.badgeMetric
         navigation.vectorModelKey = snapshot.vectorModelKey
         navigation.sidebarShownOnLaunch = snapshot.sidebarShownOnLaunch
+        navigation.thumbnailCacheLimitBytes = snapshot.thumbnailCacheLimitBytes
+        navigation.thumbnailCacheAutoCleanEnabled = snapshot.thumbnailCacheAutoCleanEnabled
         // 侧栏的初始展开状态由「启动时显示」设置决定；之后用户随时可手动展开/折叠，
         // 不会回写到这个设置项（设置项只代表「下次启动时」的默认值）。
         navigation.isSidebarExpanded = snapshot.sidebarShownOnLaunch
+    }
+
+    // MARK: - 缩略图磁盘缓存
+
+    /// App 启动后异步检查一次磁盘缩略图缓存占用，超出设置上限且开启「自动清理」时
+    /// 按 LRU 清理到上限的 90%。不阻塞首屏（在 `bootstrapIfNeeded` 末尾发起）。
+    func enforceThumbnailCacheLimitIfNeeded() {
+        guard navigation.thumbnailCacheAutoCleanEnabled else { return }
+        let limit = navigation.thumbnailCacheLimitBytes
+        guard limit > 0 else { return }
+        Task.detached(priority: .background) {
+            await DiskThumbnailCache.shared.enforceLimit(limit)
+        }
+    }
+
+    /// 「立即清理」：清空磁盘缩略图缓存 + L1 内存缓存。
+    func clearThumbnailCache() {
+        LocalThumbnailProvider.shared.clearMemoryCache()
+        Task.detached(priority: .utility) {
+            await DiskThumbnailCache.shared.clearAll()
+        }
+    }
+
+    /// 当前磁盘缩略图缓存占用（字节），供设置页展示；异步计算，不阻塞主线程。
+    func thumbnailCacheUsageBytes() async -> Int64 {
+        await DiskThumbnailCache.shared.currentUsageBytes()
     }
 }
 

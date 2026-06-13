@@ -17,6 +17,9 @@ struct PhotoGridView: NSViewControllerRepresentable {
     var badgeMetric: BadgeMetric
     var selectedIDs: Set<String>
     var sidebarExpanded: Bool
+    /// 顶部内容预留空间：为悬浮液态玻璃工具栏 / 横幅腾出位置，避免第一行照片
+    /// 初始状态就被浮在最上层的玻璃条遮住。
+    var topContentInset: CGFloat = 8
     var onSidebarExpandedChange: (Bool) -> Void
     var onLoadMore: () -> Void
     var onZoomStep: (Int) -> Void
@@ -40,7 +43,8 @@ struct PhotoGridView: NSViewControllerRepresentable {
             gridLevel: gridLevel,
             badgeMetric: badgeMetric,
             selectedIDs: selectedIDs,
-            sidebarExpanded: sidebarExpanded
+            sidebarExpanded: sidebarExpanded,
+            topContentInset: topContentInset
         )
         if let scrollToIndex {
             controller.scrollToItem(index: scrollToIndex)
@@ -149,7 +153,8 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         gridLevel: GridLevel,
         badgeMetric: BadgeMetric,
         selectedIDs: Set<String>,
-        sidebarExpanded: Bool
+        sidebarExpanded: Bool,
+        topContentInset: CGFloat = 8
     ) {
         let oldIDs = self.items.map(\.id)
         let newIDs = items.map(\.id)
@@ -164,6 +169,11 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         self.badgeMetric = badgeMetric
         self.selectedIDs = selectedIDs
         self.sidebarExpanded = sidebarExpanded
+
+        if flowLayout.sectionInset.top != topContentInset {
+            flowLayout.sectionInset.top = topContentInset
+            flowLayout.invalidateLayout()
+        }
 
         updateItemSize()
         if needsSnapshot {
@@ -196,9 +206,22 @@ final class PhotoGridViewController: NSViewController, NSCollectionViewDelegateF
         let width = floor(available / columns)
         let size = max(34, width)
         guard flowLayout.itemSize.width != size else { return }
-        flowLayout.itemSize = NSSize(width: size, height: size)
-        flowLayout.invalidateLayout()
+
         stopAllThumbnailPreheating()
+
+        // 网格密度切换动画：贴近系统照片 App 的缩放过渡——单元格平滑过渡到新尺寸并
+        // 重新排布，而不是瞬间跳变。`NSAnimationContext` + `collectionView.animator()`
+        // 让 flowLayout 的尺寸变化在下一次布局中以隐式动画呈现；时长与缓动曲线刻意
+        // 保持克制（0.22s、easeInEaseOut），流畅但不拖沓，避免视觉眩晕。
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            flowLayout.itemSize = NSSize(width: size, height: size)
+            flowLayout.invalidateLayout()
+            collectionView.animator().performBatchUpdates(nil, completionHandler: nil)
+        }
+
         refreshVisibleItems()
         updateThumbnailPreheating()
     }
@@ -475,8 +498,17 @@ final class PhotoGridItem: NSCollectionViewItem {
     private let scoreLabel = NSTextField(labelWithString: "")
     private let mediaBadge = NSTextField(labelWithString: "")
     private let similarityLabel = NSTextField(labelWithString: "")
+    /// 「相似照片」结果中，基准照片本身的角标（右下角，与 `similarityLabel` 互斥）。
+    private let referenceBadge = NSTextField(labelWithString: "")
     private let selectionRing = CALayer()
     private var thumbnailToken: ThumbnailRequestToken?
+    /// 每次 `configure()`/`prepareForReuse()` 自增的请求世代号。
+    ///
+    /// 用于在缩略图完成回调里区分"当前请求"与"过期请求"：闭包捕获发起时的
+    /// `generation` 值，回调时与 `self.requestGeneration` 比较——只有相等
+    /// 才应用结果。比直接捕获 `ThumbnailRequestToken` 引用更简单
+    /// （避免"闭包在其自身声明之前捕获 token"的编译错误），效果等价。
+    private var requestGeneration = 0
 
     override func loadView() {
         view = NSView()
@@ -531,6 +563,20 @@ final class PhotoGridItem: NSCollectionViewItem {
         similarityLabel.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.78).cgColor
         similarityLabel.isHidden = true
 
+        // 「原图」角标：与 similarityLabel 同位置、同尺寸，标记相似照片结果中的基准照片本身。
+        // 用一颗实心星星 + 文案，外观上与相似度角标区分（中性深色而非强调色），
+        // 含义是「这是查找的起点」而非「与起点的相似度」。
+        referenceBadge.translatesAutoresizingMaskIntoConstraints = false
+        referenceBadge.stringValue = "★ 原图"
+        referenceBadge.font = .systemFont(ofSize: 11, weight: .semibold)
+        referenceBadge.textColor = .white
+        referenceBadge.alignment = .center
+        referenceBadge.wantsLayer = true
+        referenceBadge.layer?.cornerRadius = 8
+        referenceBadge.layer?.masksToBounds = true
+        referenceBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        referenceBadge.isHidden = true
+
         selectionRing.borderWidth = 0
         selectionRing.borderColor = NSColor.controlAccentColor.cgColor
         selectionRing.cornerRadius = 0
@@ -540,6 +586,7 @@ final class PhotoGridItem: NSCollectionViewItem {
         scoreBadge.addSubview(scoreLabel)
         view.addSubview(mediaBadge)
         view.addSubview(similarityLabel)
+        view.addSubview(referenceBadge)
         view.layer?.addSublayer(selectionRing)
 
         NSLayoutConstraint.activate([
@@ -567,7 +614,12 @@ final class PhotoGridItem: NSCollectionViewItem {
             similarityLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
             similarityLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
             similarityLabel.heightAnchor.constraint(equalToConstant: 20),
-            similarityLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 44)
+            similarityLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+
+            referenceBadge.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            referenceBadge.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+            referenceBadge.heightAnchor.constraint(equalToConstant: 20),
+            referenceBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
     }
 
@@ -581,8 +633,11 @@ final class PhotoGridItem: NSCollectionViewItem {
         super.prepareForReuse()
         PhotoThumbnailProvider.shared.cancel(thumbnailToken)
         thumbnailToken = nil
+        // 使任何仍在途的旧请求回调失效（见 `requestGeneration` 文档注释）。
+        requestGeneration += 1
         thumbnailView.layer?.contents = nil
         similarityLabel.isHidden = true
+        referenceBadge.isHidden = true
         representedObject = nil
     }
 
@@ -600,11 +655,25 @@ final class PhotoGridItem: NSCollectionViewItem {
         configureMediaBadge(result.asset.mediaType)
         configureSimilarity(result: result)
 
+        // 「缩略图偶尔不清晰」的一个根因：`.opportunistic` 投递会先回调一张
+        // 「降质」预览图、稍后再回调最终高质量图；如果本 cell 在最终图到达前
+        // 被 `prepareForReuse()` 回收（快速滚动）又复用为同一个 `result.id`
+        // （滚回原位），旧请求的「降质图」回调可能在新请求之后才到达——
+        // 仅靠 `representedObject == result.id` 无法区分新旧请求，旧的降质图
+        // 会覆盖新请求已经设置好的清晰图。
+        //
+        // 这里额外比较闭包捕获的世代号 `generation` 与 `self.requestGeneration`
+        // （见该属性的文档注释）：只有「当前」请求的回调才会通过这个判断，
+        // 被取消/被替换的旧请求回调直接丢弃。
+        requestGeneration += 1
+        let generation = requestGeneration
         thumbnailToken = PhotoThumbnailProvider.shared.requestThumbnail(
             for: result.asset,
             targetSize: targetSize
         ) { [weak self] image in
-            guard let self, self.representedObject as? String == result.id else { return }
+            guard let self,
+                  self.representedObject as? String == result.id,
+                  self.requestGeneration == generation else { return }
             self.setThumbnail(image)
         }
     }
@@ -646,8 +715,16 @@ final class PhotoGridItem: NSCollectionViewItem {
         ]
     }
 
-    /// 「相似照片」右下角置信度角标：仅 `similarityScore` 非 nil 时显示（即处于相似模式且通过阈值）。
+    /// 「相似照片」右下角角标：基准照片本身显示「★ 原图」，其余结果显示与基准的相似度百分比；
+    /// 非相似模式下两者皆隐藏。两者位置重叠、互斥显示。
     private func configureSimilarity(result: PhotoSearchResult) {
+        if result.isReferencePhoto {
+            referenceBadge.isHidden = false
+            similarityLabel.isHidden = true
+            return
+        }
+        referenceBadge.isHidden = true
+
         guard let score = result.similarityScore else {
             similarityLabel.isHidden = true
             return

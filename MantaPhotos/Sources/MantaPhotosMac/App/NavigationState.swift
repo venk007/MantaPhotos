@@ -23,6 +23,10 @@ final class NavigationState {
     var sidebarShownOnLaunch = false
     /// 当前选用的向量模型 key（语义/相似搜索与向量索引任务用）。
     var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
+    /// 本地/外部目录源缩略图磁盘缓存上限（字节）；`<= 0` 表示不限。
+    var thumbnailCacheLimitBytes: Int64 = AppSettingsSnapshot.defaultThumbnailCacheLimitBytes
+    /// 超出上限时是否自动按 LRU 清理磁盘缩略图缓存。
+    var thumbnailCacheAutoCleanEnabled: Bool = true
 
     func adjustGridLevel(step: Int) {
         let levels = GridLevel.allCases

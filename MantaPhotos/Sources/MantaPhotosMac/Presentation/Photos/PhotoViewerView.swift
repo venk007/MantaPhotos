@@ -5,6 +5,29 @@ import Photos
 import PhotosUI
 import SwiftUI
 
+// MARK: - 架构说明（本文件是什么 / 改之前先看哪里）
+//
+// 本文件只负责查看器的 **SwiftUI 布局、状态与业务逻辑**：整体 `body`、
+// 顶部/底部工具栏的内容与样式、详情面板、媒体加载与播放控制。
+//
+// 所有 **AppKit interop**（`NSViewRepresentable`/`NSView` 子类：
+// `HostedOverlay`、`ZoomableImageView`、`SwipeAwareScrollView`、
+// `LivePhotoPlayerView`、`ViewerKeyCommandsView`）都在同目录的
+// `PhotoViewerInteropViews.swift` 里。
+//
+// 查看器的「手势失效」「快捷键失效」「按钮位置错乱」已经反复出现过，根因
+// 都是 SwiftUI 布局调整不经意间破坏了 AppKit 那一侧的 hitTest / 第一响应者
+// 协议。**修改 `body`、`viewerOverlayBars`、`viewerTopBar`、
+// `viewerBottomBar` 之前，请先读 `PhotoViewerInteropViews.swift` 顶部的
+// 架构说明，以及 `MantaPhotos/照片查看器交互问题记录与修改指南.md`。**
+//
+// 速记：
+//   - 工具栏必须用 `HostedOverlay` 包装，且不能撑满全屏（只能是自然高度的
+//     窄条；`.frame(maxWidth: .infinity)` 只能加在 `HostedOverlay{...}`
+//     外面，用于左右贴边，不能加在内部撑满整屏）。
+//   - 键盘快捷键统一在 `ViewerKeyCommandsView.KeyCommandView.keyDown` 里
+//     加，不要在按钮上加 `.keyboardShortcut`。
+
 struct PhotoViewerView: View {
     @Environment(AppState.self) private var appState
     var result: PhotoSearchResult
@@ -23,26 +46,13 @@ struct PhotoViewerView: View {
                 .ignoresSafeArea()
 
             HStack(spacing: 0) {
-                ZStack {
-                    mediaContent
-
-                    viewerChrome
-                }
+                viewerCanvas
 
                 if showsInfo {
                     detailPanel
                         .frame(width: 340)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
-            }
-
-            if !result.asset.mediaType.isPlayableInViewer {
-                Button {} label: {
-                    EmptyView()
-                }
-                .keyboardShortcut(.space, modifiers: [])
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
             }
         }
         .frame(minWidth: 980, minHeight: 680)
@@ -77,6 +87,80 @@ struct PhotoViewerView: View {
         } message: {
             Text("This calls the system Photos deletion flow. App Trash is separate and can be restored before true deletion.")
         }
+    }
+
+    /// 查看器中央画布：媒体内容 + 上下工具栏覆盖层 + 键盘快捷键处理视图。
+    ///
+    /// 拆成独立属性是为了避免 `body` 里出现一个超大、深度嵌套、带大量
+    /// 尾随闭包的表达式——这种表达式曾经触发过 Swift 类型检查器的
+    /// "Failed to produce diagnostic for expression" 内部错误（编译器在
+    /// 报错前就崩溃，无法定位具体问题）。每个子视图单独写成 `some View`
+    /// 计算属性，类型检查的复杂度被分摊到各个属性上，编译器才能正常工作。
+    private var viewerCanvas: some View {
+        ZStack {
+            mediaContent
+
+            // 顶部 / 底部工具栏分别用独立的、按内容自身高度收缩的
+            // `HostedOverlay`——**不能**合并成一个铺满整个 ZStack 的覆盖层
+            // （之前 `viewerChrome` 就是这么做的），否则覆盖层会盖住中间的
+            // 图片区域，导致 `ZoomableImageView`（NSScrollView）的捏合缩放 /
+            // 拖拽平移 / 双击缩放 / 双指滑动切图全部失效——这正是「手势失效」
+            // 的根因。详见 `HostedOverlay` 文档注释。
+            viewerOverlayBars
+
+            // 键盘快捷键：专用 `NSView`（不依赖 SwiftUI `.keyboardShortcut`），
+            // 与上面覆盖层的层级结构完全无关，详见 `ViewerKeyCommandsView`
+            // 文档注释——这是「快捷键失效」的根因修复。
+            viewerKeyCommands
+        }
+    }
+
+    private var viewerOverlayBars: some View {
+        VStack(spacing: 0) {
+            HostedOverlay { viewerTopBar }
+                // `.frame(maxWidth: .infinity)` 必须加在 `HostedOverlay` 外面：
+                // `NSHostingView` 默认按内容（带 `Spacer()` 的 `HStack`）在
+                // 「无约束」下的理想尺寸报告 `intrinsicContentSize`，并不会
+                // 自动撑满 VStack 的横向空间——不加这一句，「返回」和
+                // 「上一/下一张」两组按钮会因为中间 `Spacer()` 拿不到宽度而
+                // 挤在左侧中间，而不是分别贴在左上角/右上角。只设
+                // `maxWidth`、不设 `maxHeight`，高度仍由内容自然高度决定，
+                // 不会撑满到覆盖图片手势区。
+                .frame(maxWidth: .infinity)
+            Spacer()
+            HostedOverlay { viewerBottomBar }
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var viewerKeyCommands: some View {
+        // 注意：这里故意先用一个带显式类型标注的局部变量算出
+        // `onTogglePlayback`，再传进 `ViewerKeyCommandsView` 的构造器——
+        // 直接写成三目表达式
+        // `result.asset.mediaType.isPlayableInViewer ? togglePlayback : nil`
+        // 会让「八个尾随闭包参数 + 一个需要从『绑定方法引用』推断为
+        // `(() -> Void)?` 的三目表达式」这个组合的类型检查复杂度爆炸，
+        // 触发 Swift 类型检查器的
+        // "Failed to produce diagnostic for expression" 内部错误。
+        let onTogglePlayback: (() -> Void)?
+        if result.asset.mediaType.isPlayableInViewer {
+            onTogglePlayback = { togglePlayback() }
+        } else {
+            onTogglePlayback = nil
+        }
+
+        return ViewerKeyCommandsView(
+            onBack: { appState.library.closeViewer() },
+            onPrevious: { appState.library.selectAdjacentPhoto(delta: -1) },
+            onNext: { appState.library.selectAdjacentPhoto(delta: 1) },
+            onTogglePlayback: onTogglePlayback,
+            onToggleTrash: { appState.library.toggleSelectedViewerTrash() },
+            onToggleFavorite: { appState.library.toggleSelectedViewerFavorite() },
+            onDelete: { showsDeleteConfirmation = true },
+            onToggleInfo: { showsInfo.toggle() }
+        )
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -120,113 +204,119 @@ struct PhotoViewerView: View {
             .tint(.white)
     }
 
-    private var viewerChrome: some View {
-        VStack {
-            HStack {
-                HStack(spacing: 12) {
-                    Button {
-                        appState.library.closeViewer()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .keyboardShortcut(.escape)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay {
-                    Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-                }
-
-                Spacer()
-
-                HStack(spacing: 16) {
-                    Button {
-                        appState.library.selectAdjacentPhoto(delta: -1)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-
-                    Button {
-                        appState.library.selectAdjacentPhoto(delta: 1)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay {
-                    Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
-                }
+    /// 顶部工具栏：返回 + 上一/下一张按钮。
+    ///
+    /// **注意**：键盘快捷键（Esc / ←→）不再用 `.keyboardShortcut` 挂在这些按钮上——
+    /// 统一由 `ViewerKeyCommandsView` 处理，详见其文档注释。这里的按钮只负责
+    /// 鼠标点击与视觉呈现。这一栏被包进独立的 `HostedOverlay`，其 `NSHostingView`
+    /// 高度仅为本栏内容的自然高度（由 `VStack` 布局决定），**绝不能**加
+    /// `.frame(maxHeight: .infinity)` 等让它撑满整个查看器——否则会盖住中间的
+    /// 图片手势区域，详见 `body` 中的说明与 `HostedOverlay` 文档。
+    private var viewerTopBar: some View {
+        HStack {
+            // 「返回」：贴近系统照片 App 全屏详情左上角的 "‹ 照片墙" 返回按钮——
+            // 退出查看器、回到照片页（功能等价于原 xmark 关闭按钮，Esc 仍可用）。
+            Button {
+                appState.library.closeViewer()
+            } label: {
+                Label(appState.localized("Back"), systemImage: "chevron.left")
+                    .labelStyle(.titleAndIcon)
             }
-            .buttonStyle(.borderless)
-            .font(.title3)
-            .foregroundStyle(.white)
-            .padding(22)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .liquidGlassBackground(material: .hudWindow, in: Capsule())
+            .overlay {
+                Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .glassHoverHighlight(in: Capsule())
 
             Spacer()
 
-            HStack {
-                Text(displayName)
-                    .foregroundStyle(.white)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-
-                Spacer()
-
-                if result.asset.mediaType.isPlayableInViewer {
-                    Button {
-                        togglePlayback()
-                    } label: {
-                        Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                    }
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(!isPlayableReady)
+            HStack(spacing: 16) {
+                Button {
+                    appState.library.selectAdjacentPhoto(delta: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
 
                 Button {
-                    appState.library.toggleSelectedViewerTrash()
+                    appState.library.selectAdjacentPhoto(delta: 1)
                 } label: {
-                    Label(result.asset.inTrash ? "Restore" : "Trash", systemImage: result.asset.inTrash ? "arrow.uturn.backward" : "trash")
+                    Image(systemName: "chevron.right")
                 }
-                .keyboardShortcut("t", modifiers: [])
-
-                Button {
-                    appState.library.toggleSelectedViewerFavorite()
-                } label: {
-                    Label(result.asset.isFavorite ? "Favorited" : "Favorite", systemImage: result.asset.isFavorite ? "heart.fill" : "heart")
-                }
-                .keyboardShortcut("f", modifiers: [])
-
-                Button {
-                    showsDeleteConfirmation = true
-                } label: {
-                    Label("Delete", systemImage: "delete.left")
-                }
-                .keyboardShortcut("d", modifiers: [])
-
-                Button {
-                    showsInfo.toggle()
-                } label: {
-                    Label("Info", systemImage: "info.circle")
-                }
-                .keyboardShortcut("i", modifiers: [])
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .liquidGlassBackground(material: .hudWindow, in: Capsule())
             .overlay {
-                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
-                    .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+                Capsule().stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
             }
-            .padding(.horizontal, 22)
-            .padding(.bottom, 22)
+            .glassHoverHighlight(in: Capsule())
         }
+        .buttonStyle(.pressableGlass)
+        .font(.title3)
+        .foregroundStyle(.white)
+        .padding(22)
+    }
+
+    /// 底部工具栏：文件名 + 播放 / 照片篓 / 收藏 / 删除 / 信息按钮。
+    ///
+    /// 同 `viewerTopBar`：键盘快捷键（Space / T / F / D / I）统一由
+    /// `ViewerKeyCommandsView` 处理，不再用 `.keyboardShortcut`。这一栏同样
+    /// 被包进独立的 `HostedOverlay`，高度仅为自然高度——不能撑满整个查看器。
+    private var viewerBottomBar: some View {
+        HStack {
+            Text(displayName)
+                .foregroundStyle(.white)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+
+            Spacer()
+
+            if result.asset.mediaType.isPlayableInViewer {
+                Button {
+                    togglePlayback()
+                } label: {
+                    Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                }
+                .disabled(!isPlayableReady)
+            }
+
+            Button {
+                appState.library.toggleSelectedViewerTrash()
+            } label: {
+                Label(result.asset.inTrash ? "Restore" : "Trash", systemImage: result.asset.inTrash ? "arrow.uturn.backward" : "trash")
+            }
+
+            Button {
+                appState.library.toggleSelectedViewerFavorite()
+            } label: {
+                Label(result.asset.isFavorite ? "Favorited" : "Favorite", systemImage: result.asset.isFavorite ? "heart.fill" : "heart")
+            }
+
+            Button {
+                showsDeleteConfirmation = true
+            } label: {
+                Label("Delete", systemImage: "delete.left")
+            }
+
+            Button {
+                showsInfo.toggle()
+            } label: {
+                Label("Info", systemImage: "info.circle")
+            }
+        }
+        .buttonStyle(.pressableGlass)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .liquidGlassBackground(material: .hudWindow, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
+                .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+        }
+        .padding(.horizontal, 22)
+        .padding(.bottom, 22)
     }
 
     private var detailPanel: some View {
@@ -278,7 +368,12 @@ struct PhotoViewerView: View {
             }
             .padding(22)
         }
-        .background(.regularMaterial)
+        // 液态玻璃半透明详情栏：`LiquidGlassBackground`（`.withinWindow` 的
+        // `NSVisualEffectView`）而非系统 `.ultraThinMaterial`/`.regularMaterial`，
+        // 在查看器深色背景上呈现出有层次的磨砂玻璃质感，且应用切前台时不会
+        // 先黑后透明（见 `DesignSystem.LiquidGlassBackground`）。
+        .background(LiquidGlassBackground(material: .hudWindow))
+        .environment(\.colorScheme, .dark)
     }
 
     private var metadataRows: some View {
@@ -452,146 +547,6 @@ struct PhotoViewerView: View {
         case 60..<80: return Color(red: 0.40, green: 0.76, blue: 0.58).opacity(0.85)
         case 40..<60: return Color(red: 0.91, green: 0.77, blue: 0.34).opacity(0.85)
         default: return Color(red: 0.91, green: 0.55, blue: 0.62).opacity(0.85)
-        }
-    }
-}
-
-/// 原生可缩放图片视图：基于 `NSScrollView` 的 `allowsMagnification`，
-/// 免费获得与系统照片一致的触控板手势——
-/// 捏合缩放、放大后双指拖拽 / 滚动平移、双击切换缩放；未放大时横向滑动切换上一/下一张。
-private struct ZoomableImageView: NSViewRepresentable {
-    var image: NSImage
-    var onNavigate: (Int) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> SwipeAwareScrollView {
-        let scrollView = SwipeAwareScrollView()
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.drawsBackground = false
-        scrollView.backgroundColor = .clear
-        scrollView.allowsMagnification = true
-        scrollView.minMagnification = 1
-        scrollView.maxMagnification = 6
-        scrollView.onNavigate = onNavigate
-
-        let imageView = NSImageView()
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
-        imageView.image = image
-        imageView.autoresizingMask = [.width, .height]
-        imageView.frame = scrollView.bounds
-        scrollView.documentView = imageView
-
-        let doubleClick = NSClickGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleDoubleClick(_:))
-        )
-        doubleClick.numberOfClicksRequired = 2
-        scrollView.addGestureRecognizer(doubleClick)
-
-        context.coordinator.scrollView = scrollView
-        context.coordinator.imageView = imageView
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: SwipeAwareScrollView, context: Context) {
-        scrollView.onNavigate = onNavigate
-        if context.coordinator.imageView?.image !== image {
-            context.coordinator.imageView?.image = image
-            scrollView.magnification = 1
-            context.coordinator.imageView?.frame = scrollView.bounds
-        }
-    }
-
-    final class Coordinator {
-        weak var scrollView: NSScrollView?
-        weak var imageView: NSImageView?
-
-        @MainActor @objc func handleDoubleClick(_ recognizer: NSClickGestureRecognizer) {
-            guard let scrollView else { return }
-            if scrollView.magnification > 1.01 {
-                scrollView.magnification = 1
-            } else {
-                let point = recognizer.location(in: scrollView.documentView ?? scrollView)
-                scrollView.setMagnification(2.5, centeredAt: point)
-            }
-        }
-    }
-}
-
-/// 未放大时把横向双指滑动解释为「上一/下一张」，其余情况交给 `NSScrollView` 原生平移。
-final class SwipeAwareScrollView: NSScrollView {
-    var onNavigate: ((Int) -> Void)?
-    private var swipeAccumulator: CGFloat = 0
-    private var swipeFired = false
-
-    override func scrollWheel(with event: NSEvent) {
-        let horizontalDominant = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5
-        if magnification <= 1.01, horizontalDominant {
-            if event.phase == .began {
-                swipeAccumulator = 0
-                swipeFired = false
-            }
-            swipeAccumulator += event.scrollingDeltaX
-            if !swipeFired, abs(swipeAccumulator) >= 60 {
-                onNavigate?(swipeAccumulator < 0 ? 1 : -1)
-                swipeFired = true
-            }
-            if event.phase == .ended || event.momentumPhase == .ended {
-                swipeAccumulator = 0
-                swipeFired = false
-            }
-            return
-        }
-        super.scrollWheel(with: event)
-    }
-}
-
-private struct LivePhotoPlayerView: NSViewRepresentable {
-    var livePhoto: PHLivePhoto
-    @Binding var isPlaying: Bool
-
-    func makeNSView(context: Context) -> PHLivePhotoView {
-        let view = PHLivePhotoView()
-        view.livePhoto = livePhoto
-        view.delegate = context.coordinator
-        return view
-    }
-
-    func updateNSView(_ view: PHLivePhotoView, context: Context) {
-        if view.livePhoto != livePhoto {
-            view.livePhoto = livePhoto
-            context.coordinator.isPlaybackActive = false
-        }
-
-        if isPlaying, !context.coordinator.isPlaying {
-            view.startPlayback(with: .full)
-            context.coordinator.isPlaybackActive = true
-        } else if !isPlaying, context.coordinator.isPlaying {
-            view.stopPlayback()
-            context.coordinator.isPlaybackActive = false
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isPlaying: $isPlaying)
-    }
-
-    final class Coordinator: NSObject, PHLivePhotoViewDelegate {
-        @Binding var playbackRequested: Bool
-        var isPlaybackActive = false
-
-        var isPlaying: Bool { isPlaybackActive }
-
-        init(isPlaying: Binding<Bool>) {
-            _playbackRequested = isPlaying
-        }
-
-        func livePhotoView(_ livePhotoView: PHLivePhotoView, didEndPlaybackWith playbackStyle: PHLivePhotoViewPlaybackStyle) {
-            isPlaybackActive = false
-            playbackRequested = false
         }
     }
 }

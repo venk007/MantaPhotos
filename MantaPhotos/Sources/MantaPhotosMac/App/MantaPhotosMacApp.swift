@@ -33,6 +33,10 @@ public struct MantaPhotosApp: App {
                     appState.saveSettings()
                 }
         }
+        // macOS 26 设计哲学：去掉标题栏/菜单栏背板，内容延伸到窗口顶部，
+        // 仅保留红绿灯三个系统按钮；左右两侧的抽屉/任务状态按钮由
+        // `TopChromeOverlay`（AppShellView.swift）以独立液态玻璃按钮呈现。
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .sidebar) {
                 Button("Zoom In") {

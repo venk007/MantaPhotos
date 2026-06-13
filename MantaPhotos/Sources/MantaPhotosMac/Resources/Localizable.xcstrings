@@ -4,35 +4,6 @@
     "-" : {
 
     },
-    "%@ %lld" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ %2$lld"
-          }
-        }
-      }
-    },
-    "%@: %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@: %2$@"
-          }
-        }
-      }
-    },
-    "%lld" : {
-      "comment" : "Numeric format placeholder; not user-facing"
-    },
-    "%lld matched" : {
-
-    },
-    "⌘K" : {
-
-    },
     "0" : {
 
     },
@@ -42,39 +13,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "3 天"
-          }
-        }
-      }
-    },
-    "40+" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "40+"
-          }
-        }
-      }
-    },
-    "60+" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "60+"
-          }
-        }
-      }
-    },
-    "80+" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "80+"
           }
         }
       }
@@ -114,16 +52,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "美学"
-          }
-        }
-      }
-    },
-    "Aesthetic score range" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "美学评分区间"
           }
         }
       }
@@ -207,16 +135,6 @@
         }
       }
     },
-    "Beijing" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "北京"
-          }
-        }
-      }
-    },
     "Camera" : {
       "localizations" : {
         "zh-Hans" : {
@@ -288,9 +206,6 @@
     "Device Action Camera" : {
 
     },
-    "Device Camera" : {
-
-    },
     "Device Drone" : {
 
     },
@@ -338,19 +253,6 @@
     },
     "Failed" : {
 
-    },
-    "Failed %lld" : {
-
-    },
-    "Family" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "家人"
-          }
-        }
-      }
     },
     "Favorite" : {
       "localizations" : {
@@ -421,26 +323,6 @@
         }
       }
     },
-    "Friends" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "朋友"
-          }
-        }
-      }
-    },
-    "Greater Than" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大于"
-          }
-        }
-      }
-    },
     "Grid" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -448,27 +330,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "网格"
-          }
-        }
-      }
-    },
-    "Grid %lld" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "网格 %lld"
-          }
-        }
-      }
-    },
-    "Grid %lld · %lld matched" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Grid %1$lld · %2$lld matched"
           }
         }
       }
@@ -583,29 +444,8 @@
         }
       }
     },
-    "Include hidden" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "包含已隐藏"
-          }
-        }
-      }
-    },
     "Info" : {
 
-    },
-    "Japan" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "日本"
-          }
-        }
-      }
     },
     "Landscape" : {
       "localizations" : {
@@ -725,33 +565,12 @@
         }
       }
     },
-    "Less Than" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "小于"
-          }
-        }
-      }
-    },
     "Live" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "实况"
-          }
-        }
-      }
-    },
-    "Live Photos" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "实况照片"
           }
         }
       }
@@ -891,26 +710,6 @@
     "Notifications" : {
 
     },
-    "Only show aesthetic greater than" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "只显示美学评分大于"
-          }
-        }
-      }
-    },
-    "Only show aesthetic less than" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "只显示美学评分小于"
-          }
-        }
-      }
-    },
     "Overall" : {
       "localizations" : {
         "zh-Hans" : {
@@ -920,9 +719,6 @@
           }
         }
       }
-    },
-    "P4+ custom model tags are reserved." : {
-
     },
     "Pause" : {
 
@@ -939,17 +735,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "人物"
-          }
-        }
-      }
-    },
-    "People analysis is reserved for P4+." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "人物分析将在 P4+ 阶段启用。"
           }
         }
       }
@@ -1018,11 +803,12 @@
 
     },
     "Pocket" : {
+      "shouldTranslate" : false,
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "口袋相机"
+            "value" : "Pocket"
           }
         }
       }
@@ -1204,16 +990,6 @@
         }
       }
     },
-    "Search people" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "搜索人物"
-          }
-        }
-      }
-    },
     "Search photos" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1261,19 +1037,6 @@
         }
       }
     },
-    "Shanghai" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上海"
-          }
-        }
-      }
-    },
-    "Show or hide sidebar" : {
-
-    },
     "Six Months" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1290,23 +1053,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "排序"
-          }
-        }
-      }
-    },
-    "Sort Filename" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Filename"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文件名"
           }
         }
       }
@@ -1339,23 +1085,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最早优先"
-          }
-        }
-      }
-    },
-    "Sort Score" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Highest Score"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "评分最高"
           }
         }
       }

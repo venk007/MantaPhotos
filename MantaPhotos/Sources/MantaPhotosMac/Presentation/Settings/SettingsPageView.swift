@@ -3,15 +3,32 @@ import SwiftUI
 
 struct SettingsPageView: View {
     @Environment(AppState.self) private var appState
+    @State private var thumbnailCacheUsageBytes: Int64?
+    @State private var isClearingThumbnailCache = false
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
 
     var body: some View {
         @Bindable var navigation = appState.navigation
         Form {
             Section("外观") {
-                Picker(appState.localized("Theme"), selection: $navigation.themeMode) {
-                    ForEach(ThemeMode.allCases) { mode in
-                        Text(appState.localized(mode.localizationKey)).tag(mode)
+                LabeledContent(appState.localized("Theme")) {
+                    // 三态单选按钮（系统分段控件），替代下拉 Picker：
+                    // 三种外观一目了然，单击即切换，无需展开菜单。
+                    Picker(appState.localized("Theme"), selection: $navigation.themeMode) {
+                        ForEach(ThemeMode.allCases) { mode in
+                            Label(appState.localized(mode.localizationKey), systemImage: mode.iconName)
+                                .labelStyle(.iconOnly)
+                                .tag(mode)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 160)
                 }
 
                 Picker(appState.localized("Language"), selection: $navigation.appLanguage) {
@@ -79,17 +96,72 @@ struct SettingsPageView: View {
                     taskRow(kind)
                 }
             }
+
+            Section("缓存") {
+                HStack {
+                    Text("本地照片缩略图缓存占用")
+                    Spacer()
+                    if let bytes = thumbnailCacheUsageBytes {
+                        Text(Self.byteFormatter.string(fromByteCount: bytes))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+
+                Picker("缓存上限", selection: Binding(
+                    get: { ThumbnailCacheLimitOption.closest(to: navigation.thumbnailCacheLimitBytes) },
+                    set: { newValue in
+                        navigation.thumbnailCacheLimitBytes = newValue.rawValue
+                        appState.saveSettings()
+                    }
+                )) {
+                    ForEach(ThumbnailCacheLimitOption.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+
+                Toggle("超出上限时自动清理最久未访问的缓存", isOn: $navigation.thumbnailCacheAutoCleanEnabled)
+                    .onChange(of: navigation.thumbnailCacheAutoCleanEnabled) { _, _ in
+                        appState.saveSettings()
+                    }
+
+                Button(role: .destructive) {
+                    clearThumbnailCache()
+                } label: {
+                    Label("立即清理缩略图缓存", systemImage: "trash")
+                }
+                .disabled(isClearingThumbnailCache)
+
+                Text("系统照片库的缩略图由「照片」App 自身管理，不计入此处统计；此缓存仅用于本地 / 外部文件夹中的照片与视频缩略图，用于加快网格浏览与重新打开 App 时的加载速度。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
         .task {
             appState.tasks.refreshCompletion()
+            thumbnailCacheUsageBytes = await appState.thumbnailCacheUsageBytes()
         }
         .onChange(of: navigation.vectorModelKey) { _, newValue in
             appState.tasks.vectorModelKey = newValue
             appState.saveSettings()
             appState.tasks.start(.vectorIndex)
             appState.tasks.refreshCompletion()
+        }
+    }
+
+    /// 立即清理磁盘 + 内存缩略图缓存，并刷新占用展示。
+    private func clearThumbnailCache() {
+        isClearingThumbnailCache = true
+        appState.clearThumbnailCache()
+        Task {
+            // 给磁盘删除一点时间，再刷新占用展示。
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            thumbnailCacheUsageBytes = await appState.thumbnailCacheUsageBytes()
+            isClearingThumbnailCache = false
         }
     }
 
@@ -194,6 +266,17 @@ struct SettingsPageView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("移除该源及其照片")
+            } else if appState.library.sourceAvailability[source.id] == false {
+                // 系统图库不可访问时，在此处提供导入入口（功能与原照片页导入按钮
+                // 一致：申请权限并导入系统照片图库），替代已从照片页移除的按钮。
+                Button {
+                    appState.library.startImport()
+                } label: {
+                    Label(appState.localized("Import"), systemImage: "photo.on.rectangle")
+                }
+                .controlSize(.small)
+                .disabled(appState.library.importProgress.phase == .initialImport || appState.library.importProgress.phase == .backgroundImport)
+                .help("申请权限并导入系统照片图库")
             } else {
                 Text("系统")
                     .font(.caption)
@@ -220,5 +303,34 @@ struct SettingsPageView: View {
         if panel.runModal() == .OK, let url = panel.url {
             appState.library.addLocalDirectory(url: url)
         }
+    }
+}
+
+/// 「缩略图缓存上限」设置项的可选档位（与 `AppSettingsSnapshot.thumbnailCacheLimitBytes` 对应）。
+private enum ThumbnailCacheLimitOption: Int64, CaseIterable, Identifiable {
+    case mb500 = 524_288_000        // 500 MB
+    case gb1 = 1_073_741_824        // 1 GB
+    case gb2 = 2_147_483_648        // 2 GB（默认）
+    case gb5 = 5_368_709_120        // 5 GB
+    case unlimited = 0
+
+    var id: Int64 { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .mb500: "500 MB"
+        case .gb1: "1 GB"
+        case .gb2: "2 GB"
+        case .gb5: "5 GB"
+        case .unlimited: "不限"
+        }
+    }
+
+    /// 把已存储的字节数映射到最接近的档位；`<= 0` 视为「不限」。
+    static func closest(to bytes: Int64) -> ThumbnailCacheLimitOption {
+        guard bytes > 0 else { return .unlimited }
+        return allCases
+            .filter { $0 != .unlimited }
+            .first { $0.rawValue >= bytes } ?? .gb5
     }
 }

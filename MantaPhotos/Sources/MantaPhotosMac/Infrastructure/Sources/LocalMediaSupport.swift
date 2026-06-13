@@ -41,9 +41,15 @@ enum LocalMediaType {
     }
 }
 
-/// 本地缩略图提供者：ImageIO 等比降采样 + NSCache；视频用 AVAssetImageGenerator 取首帧。
+/// 本地缩略图提供者：两级缓存（L1 内存 `NSCache` + L2 磁盘 `DiskThumbnailCache`）+
+/// ImageIO 等比降采样 / AVAssetImageGenerator 视频取首帧兜底。
 ///
 /// 取代系统源的 `PHCachingImageManager`（其缓存对本地文件不可用）。
+///
+/// 缓存 key 按 `ThumbnailBucket` 档位（而非精确 `maxPixel`）：切换网格列数时
+/// `maxPixel` 大多落在同一档位，直接命中；解码也按档位尺寸生成，保证返回的图
+/// 永不小于目标尺寸（详见 `DiskThumbnailCache`/`ThumbnailBucket` 文档注释，
+/// 对应任务「缩略图偶尔不清晰」的修复）。
 final class LocalThumbnailProvider: @unchecked Sendable {
     static let shared = LocalThumbnailProvider()
 
@@ -53,15 +59,16 @@ final class LocalThumbnailProvider: @unchecked Sendable {
         cache.countLimit = 1_000
     }
 
-    /// 返回一个可取消句柄；命中缓存则同步回主线程。
+    /// 返回一个可取消句柄；命中 L1 缓存则同步回主线程。
     func requestThumbnail(
         fileURL: URL,
         cacheKey: String,
         maxPixel: CGFloat,
         completion: @MainActor @escaping (NSImage?) -> Void
     ) -> ThumbnailRequestToken {
-        let keyString = "\(cacheKey)@\(Int(maxPixel))"
-        if let cached = cache.object(forKey: keyString as NSString) {
+        let bucket = ThumbnailBucket.bucket(for: maxPixel)
+        let memoryKey = "\(cacheKey)@\(bucket.rawValue)" as NSString
+        if let cached = cache.object(forKey: memoryKey) {
             Task { @MainActor in completion(cached) }
             return ThumbnailRequestToken {}
         }
@@ -69,9 +76,42 @@ final class LocalThumbnailProvider: @unchecked Sendable {
         let box = CancellationBox()
         let task = Task.detached(priority: .userInitiated) { [weak self] in
             if box.isCancelled { return }
-            let image = await Self.makeThumbnail(url: fileURL, maxPixel: maxPixel)
+
+            // 磁盘缓存 key 追加文件 mtime：文件被替换（同名新文件）时自动失效旧缓存，
+            // 无需显式失效逻辑。
+            let mtime: Double
+            if let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+               let modDate = values.contentModificationDate {
+                mtime = modDate.timeIntervalSince1970
+            } else {
+                mtime = 0
+            }
+            let diskKey = "\(cacheKey)_\(Int(mtime))"
+
+            // L2：磁盘缓存命中——解码 JPEG 回填 L1 后直接返回，不再重新生成。
+            if let diskImage = await DiskThumbnailCache.shared.loadImage(cacheKey: diskKey, bucket: bucket) {
+                self?.cache.setObject(diskImage, forKey: memoryKey)
+                if box.isCancelled { return }
+                await MainActor.run { completion(diskImage) }
+                return
+            }
+
+            // L1/L2 均未命中：按「档位尺寸」（而非精确 maxPixel）解码，
+            // 结果同时写回 L1 + L2，供同档位的后续请求（切换网格密度 / 重开 App）复用。
+            // 实际解码（ImageIO 同步降采样 / 视频取帧）放到 `ThumbnailLoadingQueue`
+            // 的高并发队列上执行，避免与 Swift Concurrency 协作线程池竞争。
+            let bucketPixel = CGFloat(bucket.rawValue)
+            let image: NSImage?
+            if LocalMediaType.isVideo(fileURL) {
+                image = await Self.videoPosterFrame(url: fileURL, maxPixel: bucketPixel)
+            } else {
+                image = await ThumbnailLoadingQueue.run {
+                    Self.imageThumbnail(url: fileURL, maxPixel: bucketPixel)
+                }
+            }
             if let image {
-                self?.cache.setObject(image, forKey: keyString as NSString)
+                self?.cache.setObject(image, forKey: memoryKey)
+                await DiskThumbnailCache.shared.store(image: image, cacheKey: diskKey, bucket: bucket)
             }
             if box.isCancelled { return }
             await MainActor.run { completion(image) }
@@ -82,11 +122,9 @@ final class LocalThumbnailProvider: @unchecked Sendable {
         }
     }
 
-    static func makeThumbnail(url: URL, maxPixel: CGFloat) async -> NSImage? {
-        if LocalMediaType.isVideo(url) {
-            return await videoPosterFrame(url: url, maxPixel: maxPixel)
-        }
-        return imageThumbnail(url: url, maxPixel: maxPixel)
+    /// 清空 L1 内存缓存（配合「立即清理」一并清空磁盘缓存）。
+    func clearMemoryCache() {
+        cache.removeAllObjects()
     }
 
     static func imageThumbnail(url: URL, maxPixel: CGFloat) -> NSImage? {

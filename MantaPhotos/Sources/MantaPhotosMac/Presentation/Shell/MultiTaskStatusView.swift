@@ -1,32 +1,41 @@
 import SwiftUI
 
-/// 右上角多任务状态与控制（液态玻璃弹层）。
-/// 同时展示五类分析任务的进度，可分别开始 / 暂停 / 继续 / 停止。
+/// 顶部右侧多任务状态与控制（液态玻璃弹层）。
+///
+/// 仅在有分析任务运行时才以一枚独立的液态玻璃胶囊按钮出现（否则渲染为
+/// `EmptyView`，顶部不留空壳图标）——点击展开任务详情与进度，可分别
+/// 开始 / 暂停 / 继续 / 停止。
 struct MultiTaskStatusView: View {
     @Environment(AppState.self) private var appState
     @State private var showsPopover = false
 
     var body: some View {
-        Button {
-            showsPopover.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                if activeCount > 0 {
+        if activeCount > 0 {
+            Button {
+                showsPopover.toggle()
+            } label: {
+                HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
                     Text("\(activeCount)")
                         .font(.caption.monospacedDigit())
-                } else {
-                    Image(systemName: "checklist")
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
             }
-        }
-        .buttonStyle(.borderless)
-        .help("分析任务")
-        .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
-            popoverContent
-                .frame(width: 320)
-                .padding(14)
+            .buttonStyle(.pressableGlass)
+            .liquidGlassBackground(material: .hudWindow, in: Capsule())
+            .glassHoverHighlight(in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 3)
+            .help("分析任务")
+            .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+                popoverContent
+                    .frame(width: 320)
+                    .padding(14)
+            }
         }
     }
 

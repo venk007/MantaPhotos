@@ -22,7 +22,9 @@ struct AppSettingsRepository: Sendable {
                 gridLevel: GridLevel(rawValue: Int(values["photos.gridLevel"] ?? "") ?? GridLevel.default.rawValue) ?? .default,
                 badgeMetric: BadgeMetric(rawValue: values["photos.badgeMetric"] ?? "") ?? .aesthetic,
                 vectorModelKey: values["analysis.vectorModel"] ?? EmbeddingProviderRegistry.defaultKey,
-                sidebarShownOnLaunch: values["photos.sidebarShownOnLaunch"] == "1"
+                sidebarShownOnLaunch: values["photos.sidebarShownOnLaunch"] == "1",
+                thumbnailCacheLimitBytes: Int64(values["cache.thumbnailLimitBytes"] ?? "") ?? AppSettingsSnapshot.defaultThumbnailCacheLimitBytes,
+                thumbnailCacheAutoCleanEnabled: values["cache.thumbnailAutoClean"] != "0"
             )
         }
     }
@@ -36,7 +38,9 @@ struct AppSettingsRepository: Sendable {
                 ("photos.gridLevel", "\(snapshot.gridLevel.rawValue)"),
                 ("photos.badgeMetric", snapshot.badgeMetric.rawValue),
                 ("analysis.vectorModel", snapshot.vectorModelKey),
-                ("photos.sidebarShownOnLaunch", snapshot.sidebarShownOnLaunch ? "1" : "0")
+                ("photos.sidebarShownOnLaunch", snapshot.sidebarShownOnLaunch ? "1" : "0"),
+                ("cache.thumbnailLimitBytes", "\(snapshot.thumbnailCacheLimitBytes)"),
+                ("cache.thumbnailAutoClean", snapshot.thumbnailCacheAutoCleanEnabled ? "1" : "0")
             ]
 
             for (key, value) in values {
@@ -92,6 +96,9 @@ extension AppSettingsRepository {
 }
 
 struct AppSettingsSnapshot: Equatable, Sendable {
+    /// 缩略图磁盘缓存的默认上限：2GB。
+    static let defaultThumbnailCacheLimitBytes: Int64 = 2 * 1_024 * 1_024 * 1_024
+
     var themeMode: ThemeMode
     var appLanguage: AppLanguage
     var gridLevel: GridLevel
@@ -99,4 +106,9 @@ struct AppSettingsSnapshot: Equatable, Sendable {
     var vectorModelKey: String = EmbeddingProviderRegistry.defaultKey
     /// App 启动时是否默认展开左侧快捷筛选抽屉。
     var sidebarShownOnLaunch: Bool = false
+    /// 本地/外部目录源缩略图磁盘缓存（`DiskThumbnailCache`）的占用上限；
+    /// `<= 0` 表示「不限」。系统照片库的缩略图由 PhotoKit 自行管理，不计入此项。
+    var thumbnailCacheLimitBytes: Int64 = defaultThumbnailCacheLimitBytes
+    /// 超出上限时是否自动按 LRU 清理。
+    var thumbnailCacheAutoCleanEnabled: Bool = true
 }

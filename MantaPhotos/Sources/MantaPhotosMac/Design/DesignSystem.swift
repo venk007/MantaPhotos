@@ -46,7 +46,9 @@ enum DesignSystem {
         static let scrimDark = Color.black.opacity(0.22)
 
         /// 查看器整屏底色：照片置于深底之上（系统照片查看器同理），属内容呈现而非 chrome。
-        static let viewerBackdrop = Color.black.opacity(0.9)
+        /// 0.85（而非纯黑 0.9+）：略微调低，让详情栏的 `.ultraThinMaterial`
+        /// 液态玻璃在深色背景上仍能透出一点层次，不会呈现为「纯黑面板」。
+        static let viewerBackdrop = Color.black.opacity(0.85)
     }
 
     enum Metrics {
@@ -55,6 +57,12 @@ enum DesignSystem {
         /// 保证有无照片、各分区菜单切换时高度完全一致、不被内容撑高。
         static let topBarHeight: CGFloat = 48
         static let bottomBarHeight: CGFloat = 36
+        /// 「特殊相册」横幅（相似照片结果 / 废片篓 / 已应用筛选）固定高度。
+        /// 与 `topBarHeight` 同理：用固定高度强约束，避免无结果、长标题等场景把
+        /// 菜单区域撑高（对应历史 bug：特殊筛选后无结果时菜单区域过高）。
+        static let bannerHeight: CGFloat = 44
+        /// 照片页悬浮工具栏固定高度（标题/计数、导入、评分菜单、缩放、角标、排序）。
+        static let photosToolbarHeight: CGFloat = 58
     }
 
     enum Palette {
@@ -92,6 +100,103 @@ extension View {
     /// 为液态玻璃按钮 / 分段控件添加 hover 高亮 + 轻微放大反馈。
     func glassHoverHighlight<S: Shape>(in shape: S) -> some View {
         modifier(GlassHoverHighlight(shape: shape))
+    }
+}
+
+/// 液态玻璃按钮的「按下」反馈：在 `glassHoverHighlight` 的悬浮高亮之外，
+/// 补充按下瞬间的轻微缩小 + 加深一档的不透明遮罩，贴近系统照片 App 顶部/底部
+/// 工具栏按钮按下时的「回弹」手感。
+///
+/// 仅做视觉层（缩放 + 透明度），不改变 `action` 的触发逻辑——
+/// 套用本样式不会影响按钮原有功能。
+struct PressableGlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == PressableGlassButtonStyle {
+    /// 液态玻璃按钮的标准按下反馈样式。
+    static var pressableGlass: PressableGlassButtonStyle { PressableGlassButtonStyle() }
+}
+
+/// 液态玻璃背板：基于 `NSVisualEffectView`，强制 `.withinWindow` 混合 + `.active` 状态。
+///
+/// **修复「从其他 App 切换回来时，玻璃背景先黑后透明」**：SwiftUI 系统材质
+/// （`.ultraThinMaterial` / `.regularMaterial`）以及 `.glassEffect()` 默认按
+/// `.behindWindow` 模式混合——需要 WindowServer 实时合成「窗口背后的桌面 /
+/// 其他 App 内容」。本窗口被切到后台、再次变为前台的瞬间，这份跨进程合成尚未
+/// 就绪，`NSVisualEffectView` 会先用纯黑占位，等首帧采样完成才淡入真正的玻璃
+/// 效果——即抽屉、悬浮工具栏「先黑后透明」的闪烁。
+///
+/// 抽屉、悬浮工具栏等本就叠加在「本窗口自身已渲染好的内容」之上（同一
+/// `ZStack`），改用 `.withinWindow` 混合只采样窗口自身图层，不依赖跨进程合成，
+/// 因此没有这个延迟——`PhotoGridItem` 的评分角标（见 `PhotoGridView.swift`）
+/// 一直用的就是这个方案，视觉效果与系统材质一致。
+struct LiquidGlassBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .withinWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+    }
+}
+
+extension View {
+    /// 用 `.withinWindow` 的 `NSVisualEffectView` 作为背景，替代 SwiftUI 系统
+    /// `Material` / `.glassEffect()`（见 `LiquidGlassBackground`）。
+    /// 抽屉、悬浮工具栏、按钮背板等浮层一律应使用此方法，避免应用切前台时的黑闪。
+    func liquidGlassBackground<S: Shape>(
+        material: NSVisualEffectView.Material = .hudWindow,
+        in shape: S
+    ) -> some View {
+        background(LiquidGlassBackground(material: material).clipShape(shape))
+    }
+
+    /// 悬浮液态玻璃条：照片页顶部工具栏 / 横幅的统一外观——一条浮在照片墙上方的
+    /// 圆角玻璃胶囊，而非贯穿全宽的不透明色块。滚动照片时透过玻璃可见下层内容，
+    /// 不会出现遮挡视野的「黑条」，把更多面积留给照片本身。
+    func floatingGlassBar() -> some View {
+        self
+            .liquidGlassBackground(material: .hudWindow, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay, style: .continuous)
+                    .strokeBorder(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 14, x: 0, y: 4)
+    }
+
+    /// 独立悬浮液态玻璃胶囊：贴近系统照片 App 顶部工具栏「多颗独立胶囊/圆形按钮、
+    /// 组间留白」的外观——每个功能分组各自一颗完全圆角的胶囊，而不是合并成
+    /// 贯穿整行的长条（那是 `floatingGlassBar()` 的用途，留给页面级横幅）。
+    func floatingGlassCapsule() -> some View {
+        self
+            .liquidGlassBackground(material: .hudWindow, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 3)
+    }
+
+    /// 独立悬浮液态玻璃圆形：纯图标按钮，贴近系统照片 App 的 info / 分享 / 收藏等
+    /// 圆形按钮。
+    func floatingGlassCircle() -> some View {
+        self
+            .liquidGlassBackground(material: .hudWindow, in: Circle())
+            .overlay {
+                Circle().strokeBorder(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 3)
     }
 }
 

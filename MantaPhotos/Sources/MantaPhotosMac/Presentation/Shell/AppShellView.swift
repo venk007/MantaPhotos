@@ -7,8 +7,6 @@ struct AppShellView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                TopBarView()
-                Divider()
                 ZStack(alignment: .leading) {
                     routeView
                     if appState.navigation.route == .photos {
@@ -18,10 +16,17 @@ struct AppShellView: View {
                 }
                 // 内容区始终撑满：否则像 Timeline/Reports/Settings 这类非贪婪内容会让整个
                 // VStack 在外层 ZStack 里垂直居中，顶部标签栏上方出现大块空白。
+                //
+                // 顶部菜单栏/标题栏已彻底移除（macOS 26 设计哲学），内容区从窗口最
+                // 顶端（红绿灯所在行）开始延伸；`TopChromeOverlay` 以悬浮玻璃按钮
+                // 形式叠加在上方，不再占用独立一行。
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 BottomBarView()
             }
+
+            TopChromeOverlay()
+                .zIndex(6)
 
             if !appState.navigation.isFindOverlayPresented {
                 VStack(spacing: 0) {
@@ -38,6 +43,16 @@ struct AppShellView: View {
                     .zIndex(10)
             }
 
+            // 照片查看器：占据整个应用页面（而非系统 sheet），与系统照片 App 的
+            // 「双击照片 → 全屏详情，点返回回到照片墙」体验一致。淡入 + 轻微放大
+            // 进场、退场同一组动画反向播放，流畅但不拖沓。
+            if appState.library.isViewerPresented, let viewerResult = appState.library.selectedPhotoForViewer {
+                PhotoViewerView(result: viewerResult)
+                    .environment(appState)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    .zIndex(15)
+            }
+
             if case .failed(let message) = appState.bootstrapStatus {
                 VStack {
                     Spacer()
@@ -52,6 +67,7 @@ struct AppShellView: View {
         }
         .animation(.snappy(duration: 0.18), value: appState.navigation.isFindOverlayPresented)
         .animation(.snappy(duration: 0.2), value: appState.navigation.route)
+        .animation(.snappy(duration: 0.22), value: appState.library.isViewerPresented)
         .background(AppKeyboardShortcutView().environment(appState).frame(width: 0, height: 0))
         .onChange(of: appState.navigation.route) { _, route in
             if route != .photos {
@@ -159,102 +175,58 @@ struct AppKeyboardShortcutView: NSViewRepresentable {
     }
 }
 
-struct TopBarView: View {
+/// 顶部「无菜单栏」chrome：替代原 `TopBarView`。
+///
+/// macOS 26 设计哲学下，标题栏/菜单栏背板已彻底移除（见
+/// `MantaPhotosApp.windowStyle(.hiddenTitleBar)`），内容延伸到窗口最顶端，
+/// 仅保留系统红绿灯三个按钮。本视图只悬浮两枚独立的液态玻璃按钮：
+/// - 左侧：抽屉开关（红绿灯右侧），等价于 Tab 键，仅照片页显示；
+/// - 右侧：分析任务状态——`MultiTaskStatusView` 仅在有任务运行时才渲染
+///   自己（否则是 `EmptyView`），因此「无任务时顶部只有左侧一枚按钮」。
+///
+/// 原 `TopBarView` 中的 Logo / 路由 Tab 已由底部 `LiquidGlassDock` 承担同等
+/// 导航功能；通知按钮（本就 `.disabled(true)` 且无实际功能）与主题切换按钮
+/// （已迁移到设置页「外观」的三态分段控件）一并彻底移除。
+struct TopChromeOverlay: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 18) {
-            HStack(spacing: 12) {
+        VStack(spacing: 0) {
+            HStack {
                 if appState.navigation.route == .photos {
-                    sidebarToggleButton
+                    drawerToggleButton
                 }
-                logoButton
-                navTabs
+                Spacer(minLength: 0)
+                MultiTaskStatusView()
             }
-            .layoutPriority(1)
+            .padding(.leading, appState.navigation.route == .photos ? 80 : DesignSystem.Spacing.lg)
+            .padding(.trailing, DesignSystem.Spacing.lg)
+            .padding(.top, 10)
 
             Spacer(minLength: 0)
-            trailingControls
         }
-        .padding(.horizontal, DesignSystem.Spacing.lg)
-        .frame(height: DesignSystem.Metrics.topBarHeight)
+        .allowsHitTesting(true)
     }
 
-    /// macOS 原生风格的侧栏开关（SF Symbol），等价于 Tab 键。
-    private var sidebarToggleButton: some View {
+    /// 独立的液态玻璃抽屉开关：位于红绿灯三个按钮右侧，展开/收起左侧抽屉
+    /// （等价于 Tab 键）。展开抽屉时本按钮与红绿灯一起浮在抽屉组件右上方。
+    private var drawerToggleButton: some View {
         Button {
             appState.navigation.isSidebarExpanded.toggle()
         } label: {
             Image(systemName: "sidebar.leading")
                 .font(.body)
                 .symbolVariant(appState.navigation.isSidebarExpanded ? .fill : .none)
+                .frame(width: 30, height: 30)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.pressableGlass)
+        .liquidGlassBackground(material: .hudWindow, in: Circle())
+        .glassHoverHighlight(in: Circle())
+        .overlay {
+            Circle().strokeBorder(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 3)
         .help("显示 / 隐藏侧栏（Tab）")
-    }
-
-    private var logoButton: some View {
-        Button {
-            appState.navigation.route = .photos
-            appState.library.exitTrashView()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "camera")
-                Text(appState.localized("MantaPhotos"))
-                    .font(.headline.weight(.semibold))
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var navTabs: some View {
-        HStack(spacing: 4) {
-            ForEach(AppRoute.allCases) { route in
-                topTab(route)
-            }
-        }
-    }
-
-    private var trailingControls: some View {
-        HStack(spacing: 12) {
-            MultiTaskStatusView()
-
-            Button {
-                appState.navigation.themeMode = appState.navigation.themeMode.nextMode
-            } label: {
-                Image(systemName: appState.navigation.themeMode.iconName)
-            }
-            .buttonStyle(.borderless)
-            .help("Theme")
-
-            Button {} label: {
-                Image(systemName: "bell")
-            }
-            .buttonStyle(.borderless)
-            .disabled(true)
-            .help("Notifications")
-        }
-    }
-
-    private func topTab(_ route: AppRoute) -> some View {
-        Button {
-            appState.navigation.route = route
-            if route == .photos {
-                appState.library.exitTrashView()
-            }
-        } label: {
-            Label(appState.localized(route.localizationKey), systemImage: route.iconName)
-                .labelStyle(.titleAndIcon)
-                .font(.callout.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .foregroundStyle(appState.navigation.route == route ? .primary : .secondary)
-                .background {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(appState.navigation.route == route ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear))
-                }
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -267,20 +239,26 @@ struct SidebarOverlayView: View {
         // 抽屉展开时这片透明 Spacer 会拦截下层所有点击，导致按钮失效。
         // 直接让抽屉面板本身（固定宽度）参与 ZStack(alignment: .leading) 布局即可。
         //
-        // 玻璃材质改用 `.regularMaterial`（而非 `.glassEffect`）：抽屉随
-        // `isSidebarExpanded` 频繁插入/移除并带 `.transition`，`.glassEffect`
-        // 的背景采样在视图重建/应用切前台时有约 1s 的初始化延迟，期间呈黑底，
-        // 之后才闪烁为真正的玻璃效果。`.regularMaterial` 基于成熟的
-        // `NSVisualEffectView`，无此初始化延迟，视觉上同样是半透明液态玻璃。
+        // 玻璃材质用 `liquidGlassBackground`（`.withinWindow` 的 `NSVisualEffectView`，
+        // 而非 `.glassEffect` / `.regularMaterial` 的 `.behindWindow` 混合）：
+        // `.behindWindow` 依赖 WindowServer 实时合成「窗口背后的桌面/其他 App
+        // 内容」，抽屉随 `isSidebarExpanded` 插入/移除、以及应用切前台时这份
+        // 跨进程合成尚未就绪，会先呈黑底再淡入玻璃效果。`.withinWindow` 只采样
+        // 本窗口已渲染好的图层，无此延迟，视觉上同样是半透明液态玻璃。
         SidebarView()
             .frame(width: DesignSystem.Metrics.sidebarWidth)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
+            .liquidGlassBackground(material: .sidebar, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay))
             .overlay {
                 RoundedRectangle(cornerRadius: DesignSystem.Radius.overlay)
                     .stroke(DesignSystem.Glass.hairline, lineWidth: DesignSystem.Glass.hairlineWidth)
             }
             .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
+            // 顶部菜单栏已移除，内容区从窗口最顶端开始；这里补上与 `.leading`
+            // 同量级的顶部边距，让抽屉顶端基本贴到窗口顶部、又留一点圆角边框
+            // 与边界距离——展开时红绿灯与 `TopChromeOverlay` 的抽屉按钮正好
+            // 浮在抽屉组件的左上 / 右上角上方。
             .padding(.leading, 16)
+            .padding(.top, 16)
             .offset(x: appState.navigation.isSidebarExpanded ? 0 : -DesignSystem.Metrics.sidebarWidth - 32)
             .animation(.snappy(duration: 0.24), value: appState.navigation.isSidebarExpanded)
             .allowsHitTesting(appState.navigation.isSidebarExpanded)
@@ -304,7 +282,7 @@ struct LiquidGlassDock: View {
                 }
             }
             .padding(6)
-            .glassEffect(.regular, in: Capsule())
+            .liquidGlassBackground(material: .hudWindow, in: Capsule())
             .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
 
             Button {
@@ -314,9 +292,10 @@ struct LiquidGlassDock: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 46, height: 46)
-                    .glassEffect(.regular, in: Circle())
+                    .liquidGlassBackground(material: .hudWindow, in: Circle())
+                    .glassHoverHighlight(in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressableGlass)
             .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
             .help(appState.localized("Search photos"))
         }
@@ -349,8 +328,9 @@ struct LiquidGlassDock: View {
                 }
             }
             .contentShape(Capsule())
+            .glassHoverHighlight(in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressableGlass)
         .help(appState.localized(route.localizationKey))
     }
 }
@@ -369,6 +349,10 @@ struct BottomBarView: View {
         .font(.footnote)
         .padding(.horizontal, DesignSystem.Spacing.lg)
         .frame(height: DesignSystem.Metrics.bottomBarHeight)
+        .frame(maxWidth: .infinity)
+        // 半透明液态玻璃背板，替代旧版纯色/黑色背景，与抽屉、悬浮工具栏等
+        // chrome 在材质语言上保持一致（同样的 `.hudWindow` + `.withinWindow`）。
+        .liquidGlassBackground(material: .hudWindow, in: Rectangle())
     }
 
     private var statusText: String {

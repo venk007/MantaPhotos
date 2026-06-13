@@ -287,6 +287,16 @@ public enum SortMode: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// 排序方式图标：日期类用时钟方向箭头，分数类用星标实心/描边区分高低。
+    public var iconName: String {
+        switch self {
+        case .creationDateDescending: "arrow.down.circle"
+        case .creationDateAscending: "arrow.up.circle"
+        case .aestheticScoreDescending: "star.fill"
+        case .aestheticScoreAscending: "star"
+        }
+    }
+
     public var localizationKey: String {
         switch self {
         case .creationDateDescending: "Sort Newest"

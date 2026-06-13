@@ -18,13 +18,15 @@ struct PhotosPageView: View {
             } label: {
                 Label("全部恢复", systemImage: "arrow.uturn.backward")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
             Button(role: .destructive) {
                 showEmptyTrashConfirm = true
             } label: {
                 Label("清空（永久删除）", systemImage: "trash")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
         }
     }
 
@@ -35,23 +37,17 @@ struct PhotosPageView: View {
             } label: {
                 Label(appState.localized("Clear"), systemImage: "xmark")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
         }
     }
 
     var body: some View {
         @Bindable var library = appState.library
-        VStack(spacing: 0) {
-            PhotosToolbarView()
-            if appState.library.isTrashViewActive {
-                trashActionBar
-            } else if appState.library.isSimilarMode {
-                similarModeBar
-            } else if !appState.library.searchFilter.isEmpty {
-                FindAppliedBannerView()
-            }
-            Divider()
-            ZStack {
+        ZStack(alignment: .top) {
+            // 照片墙：撑满整个页面，悬浮工具栏以液态玻璃浮层覆盖在上方，
+            // 不再挤占独立的一整行——把绝大部分面积留给照片本身。
+            Group {
                 if appState.library.photoResults.isEmpty {
                     PhotosEmptyStateView()
                 } else {
@@ -61,6 +57,7 @@ struct PhotosPageView: View {
                         badgeMetric: appState.navigation.badgeMetric,
                         selectedIDs: Set([appState.library.selectedPhotoID].compactMap { $0 }),
                         sidebarExpanded: appState.navigation.isSidebarExpanded,
+                        topContentInset: gridTopInset,
                         onSidebarExpandedChange: { expanded in
                             appState.navigation.isSidebarExpanded = expanded
                         },
@@ -73,10 +70,21 @@ struct PhotosPageView: View {
                         onSelect: { result in
                             appState.library.openViewer(for: result)
                         },
-                        onSectionsChange: { dateSections = $0 },
+                        onSectionsChange: { sections in
+                            // 避免在 `updateNSViewController`（视图更新流程内）同步修改 @State，
+                            // 否则会触发 "Modifying state during view update" 未定义行为告警。
+                            DispatchQueue.main.async { dateSections = sections }
+                        },
                         onVisibleDateChange: { date in
-                            currentVisibleDate = date
-                            markScrubberActive()
+                            // 与 `onSectionsChange` 同理：`reportVisibleDate()` 可能在
+                            // `updateNSViewController` 触发的布局变化中同步调用
+                            // （`NSView.boundsDidChangeNotification` 可能同步派发），
+                            // 这里同样延后到下一轮 runloop 再修改 @State，避免
+                            // "Modifying state during view update" 告警。
+                            DispatchQueue.main.async {
+                                currentVisibleDate = date
+                                markScrubberActive()
+                            }
                         },
                         scrollToIndex: scrollToIndex,
                         onScrollHandled: { scrollToIndex = nil }
@@ -101,10 +109,10 @@ struct PhotosPageView: View {
                         ProgressView()
                             .controlSize(.small)
                             .padding(10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                            .liquidGlassBackground(material: .hudWindow, in: RoundedRectangle(cornerRadius: 8))
                         Spacer()
                     }
-                    .padding(.top, 12)
+                    .padding(.top, gridTopInset + 12)
                 }
 
                 if appState.library.isLoadingMorePhotos {
@@ -118,11 +126,27 @@ struct PhotosPageView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(.regularMaterial, in: Capsule())
+                        .liquidGlassBackground(material: .hudWindow, in: Capsule())
                         .padding(.bottom, 18)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // 悬浮顶部工具栏：始终贴在页面最上方，完全透明的液态玻璃容器，
+            // 滚动照片时透出下层内容、不遮挡，把交互压缩为一排。
+            VStack(spacing: DesignSystem.Spacing.sm) {
+                PhotosToolbarView()
+                if appState.library.isTrashViewActive {
+                    trashActionBar
+                } else if appState.library.isSimilarMode {
+                    similarModeBar
+                } else if !appState.library.searchFilter.isEmpty {
+                    FindAppliedBannerView()
+                }
+            }
+            .padding(.horizontal, DesignSystem.Spacing.lg)
+            .padding(.top, DesignSystem.Spacing.sm)
         }
         .task {
             await appState.library.refreshPhotosIfNeeded()
@@ -132,12 +156,6 @@ struct PhotosPageView: View {
         }
         .onChange(of: appState.library.pendingScrollAnchorID) {
             restoreScrollAnchorIfNeeded()
-        }
-        .sheet(isPresented: $library.isViewerPresented) {
-            if let result = appState.library.selectedPhotoForViewer {
-                PhotoViewerView(result: result)
-                    .environment(appState)
-            }
         }
         .confirmationDialog(
             "清空废片篓？系统照片将永久删除，本地文件移入系统废纸篓。",
@@ -149,6 +167,20 @@ struct PhotosPageView: View {
             }
             Button("取消", role: .cancel) {}
         }
+    }
+
+    /// 照片墙顶部预留高度：为悬浮工具栏 + 横幅腾出空间，让第一行照片不被
+    /// 浮层初始遮挡。横幅高度按当前是否展示特殊相册横幅动态计算，避免
+    /// 出现「空横幅占位但菜单区域过高」的回归（见历史 bug 修复）。
+    private var gridTopInset: CGFloat {
+        var inset = DesignSystem.Spacing.sm + DesignSystem.Metrics.photosToolbarHeight
+        let showsBanner = appState.library.isTrashViewActive
+            || appState.library.isSimilarMode
+            || !appState.library.searchFilter.isEmpty
+        if showsBanner {
+            inset += DesignSystem.Spacing.sm + DesignSystem.Metrics.bannerHeight
+        }
+        return inset + DesignSystem.Spacing.sm
     }
 
     /// 标记滚动导航为活跃，并在停顿后自动淡出。
@@ -224,7 +256,7 @@ struct PhotoScrubberView: View {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .glassEffect(.regular, in: Capsule())
+                .liquidGlassBackground(material: .hudWindow, in: Capsule())
                 .fixedSize()
                 .offset(x: -56, y: min(max(0, dragY - 16), max(0, geo.size.height - 32)))
         }
@@ -285,59 +317,20 @@ struct FindAppliedBannerView: View {
             } label: {
                 Label(appState.localized("Adjust"), systemImage: "slider.horizontal.3")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
 
             Button {
                 appState.library.searchFilter = SearchFilterState()
             } label: {
                 Label(appState.localized("Clear"), systemImage: "xmark")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
         .frame(height: DesignSystem.Metrics.bannerHeight)
-        .background(.regularMaterial)
-    }
-}
-
-/// 「特殊相册」横幅：相似照片结果 / 废片篓等"带前置筛选条件的临时相册"统一外观。
-///
-/// 这是「浏览上下文返回栈」（`BrowseContext`）在 UI 层的标准呈现：左侧图标 + 标题表明
-/// 当前处于一个临时的特殊相册中，右侧固定提供「返回」——回到进入前的筛选结果、
-/// 滚动位置，并在原先打开过照片详情时重新打开。各相册自身的操作（清除 / 全部恢复 /
-/// 清空等）通过 `actions` 传入，排在「返回」之前。
-///
-/// 后续新增「智能筛选相册」「相册详情」等同类页面，复用这一组件即可获得一致的
-/// 外观与返回体验。
-struct SpecialAlbumBannerView<Actions: View>: View {
-    @Environment(AppState.self) private var appState
-    let icon: String
-    let title: String
-    @ViewBuilder var actions: () -> Actions
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(.secondary)
-
-            Text(title)
-                .font(.callout.weight(.medium))
-                .lineLimit(1)
-
-            Spacer()
-
-            actions()
-
-            Button {
-                appState.library.goBack()
-            } label: {
-                Label(appState.localized("Back"), systemImage: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(.horizontal, DesignSystem.Spacing.lg)
-        .frame(height: DesignSystem.Metrics.bannerHeight)
-        .background(.regularMaterial)
+        .floatingGlassBar()
     }
 
     private var summary: String {
@@ -386,28 +379,62 @@ struct SpecialAlbumBannerView<Actions: View>: View {
     }
 }
 
+/// 「特殊相册」横幅：相似照片结果 / 废片篓等"带前置筛选条件的临时相册"统一外观。
+///
+/// 这是「浏览上下文返回栈」（`BrowseContext`）在 UI 层的标准呈现：左侧图标 + 标题表明
+/// 当前处于一个临时的特殊相册中，右侧固定提供「返回」——回到进入前的筛选结果、
+/// 滚动位置，并在原先打开过照片详情时重新打开。各相册自身的操作（清除 / 全部恢复 /
+/// 清空等）通过 `actions` 传入，排在「返回」之前。
+///
+/// 后续新增「智能筛选相册」「相册详情」等同类页面，复用这一组件即可获得一致的
+/// 外观与返回体验。
+struct SpecialAlbumBannerView<Actions: View>: View {
+    @Environment(AppState.self) private var appState
+    let icon: String
+    let title: String
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.secondary)
+
+            Text(title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+
+            Spacer()
+
+            actions()
+
+            Button {
+                appState.library.goBack()
+            } label: {
+                Label(appState.localized("Back"), systemImage: "chevron.left")
+            }
+            .buttonStyle(.pressableGlass)
+            .glassHoverHighlight(in: Capsule())
+        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+        .frame(height: DesignSystem.Metrics.bannerHeight)
+        .floatingGlassBar()
+    }
+}
+
 struct PhotosToolbarView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        @Bindable var library = appState.library
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(appState.localized("Photos"))
-                    .font(.title3.weight(.semibold))
-                Text(countText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
+        // 参考系统照片 App 顶部工具栏：每个功能分组各自一颗独立的悬浮液态玻璃
+        // 胶囊/圆形按钮，组间留白透出照片墙，而不是合并成贯穿整行的长条
+        // （那曾是 `floatingGlassBar()` 套在整个 HStack 外的旧版做法）。
+        //
+        // 去掉左侧「照片」标题 + 计数胶囊与导入按钮：标题文字与项目树已随顶部
+        // 菜单栏一起移除，筛选条件与匹配数量改由底部工具栏展示；导入按钮迁移
+        // 到设置页「照片源」的系统图库行（仅图库不可访问时显示，逻辑不变）。
+        // 精简后顶部悬浮工具栏只保留与「当前网格视图」直接相关的操作，整组靠右。
+        HStack(spacing: 10) {
             Spacer()
-
-            Button {
-                appState.library.startImport()
-            } label: {
-                Label(appState.localized("Import"), systemImage: "photo.on.rectangle")
-            }
-            .disabled(appState.library.importProgress.phase == .initialImport || appState.library.importProgress.phase == .backgroundImport)
 
             Menu {
                 Button {
@@ -436,46 +463,43 @@ struct PhotosToolbarView: View {
             }
             .disabled(appState.analysis.analysisProgress.isRunning)
             .menuStyle(.borderlessButton)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
-            .glassHoverHighlight(in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .floatingGlassCapsule()
+            .glassHoverHighlight(in: Capsule())
 
             ZoomControlView()
 
             BadgeSegmentView()
 
-            Picker(appState.localized("Sort"), selection: $library.searchFilter.sortMode) {
-                ForEach(SortMode.allCases) { mode in
-                    Text(appState.localized(mode.localizationKey)).tag(mode)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 190)
+            sortMenu
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
-        .frame(height: 58)
+        .frame(height: DesignSystem.Metrics.photosToolbarHeight)
     }
 
-    private var countText: String {
-        if appState.library.matchedPhotoCount == appState.library.photoResults.count {
-            switch appState.navigation.appLanguage {
-            case .zhHans:
-                return "\(appState.library.photoResults.count.formatted()) 张可见"
-            case .system where Locale.preferredLanguages.first?.hasPrefix("zh") == true:
-                return "\(appState.library.photoResults.count.formatted()) 张可见"
-            default:
-                return "\(appState.library.photoResults.count.formatted()) visible"
+    /// 排序菜单：与「评分」菜单同款外观——液态玻璃胶囊里的系统 `Menu`，按钮本身
+    /// 展示当前排序方式的图标+文字，点击展开 4 个选项（各自带方向/星标图标）。
+    /// 比旧版固定宽度 170pt、套在 `.floatingGlassCapsule()` 里的 `Picker` 更窄、
+    /// 随内容自适应宽度，且不是「组件套组件」。
+    private var sortMenu: some View {
+        let current = appState.library.searchFilter.sortMode
+        return Menu {
+            ForEach(SortMode.allCases) { mode in
+                Button {
+                    appState.library.searchFilter.sortMode = mode
+                } label: {
+                    Label(appState.localized(mode.localizationKey), systemImage: mode.iconName)
+                }
             }
+        } label: {
+            Label(appState.localized(current.localizationKey), systemImage: current.iconName)
         }
-        switch appState.navigation.appLanguage {
-        case .zhHans:
-            return "\(appState.library.photoResults.count.formatted()) 已加载 · \(appState.library.matchedPhotoCount.formatted()) 匹配"
-        case .system where Locale.preferredLanguages.first?.hasPrefix("zh") == true:
-            return "\(appState.library.photoResults.count.formatted()) 已加载 · \(appState.library.matchedPhotoCount.formatted()) 匹配"
-        default:
-            return "\(appState.library.photoResults.count.formatted()) loaded · \(appState.library.matchedPhotoCount.formatted()) matched"
-        }
+        .menuStyle(.borderlessButton)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .floatingGlassCapsule()
+        .glassHoverHighlight(in: Capsule())
     }
 }
 
@@ -488,25 +512,32 @@ struct ZoomControlView: View {
                 appState.navigation.adjustGridLevel(step: 1)
             } label: {
                 Image(systemName: "minus")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
             }
             .disabled(currentIndex >= GridLevel.allCases.count - 1)
             .help(appState.localized("Zoom out"))
             .glassHoverHighlight(in: Circle())
 
+            // 浅色竖线分隔加 / 减按钮，呼应系统照片 App 缩放控件的分段感。
+            Rectangle()
+                .fill(DesignSystem.Glass.hairline)
+                .frame(width: DesignSystem.Glass.hairlineWidth, height: 16)
+
             Button {
                 appState.navigation.adjustGridLevel(step: -1)
             } label: {
                 Image(systemName: "plus")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
             }
             .disabled(currentIndex <= 0)
             .help(appState.localized("Zoom in"))
             .glassHoverHighlight(in: Circle())
         }
-        .buttonStyle(.borderless)
+        // 与「导入 / 评分」等按钮一致的按下反馈（轻微缩小 + 减淡），
+        // 替换原 `.borderless`：那只提供系统默认 hover 样式，缺少按下回弹。
+        .buttonStyle(.pressableGlass)
         .padding(4)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+        .floatingGlassCapsule()
     }
 
     private var currentIndex: Int {
@@ -526,7 +557,7 @@ struct BadgeSegmentView: View {
             segment(.overall, icon: "star")
         }
         .padding(3)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.panel))
+        .floatingGlassCapsule()
         .opacity(badgeHidden ? 0.55 : 1)
         .help(badgeHidden ? "高密度下不显示分数角标，仅可切换维度" : "分数维度")
     }
@@ -540,17 +571,17 @@ struct BadgeSegmentView: View {
             Label(appState.localized(metric.localizationKey), systemImage: icon)
                 .labelStyle(.titleAndIcon)
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        // 与其它玻璃按钮统一按下反馈（轻微缩小 + 减淡）。
+        .buttonStyle(.pressableGlass)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .foregroundStyle(selected ? (badgeHidden ? Color.secondary : Color.white) : Color.secondary)
         .background {
             if selected, !badgeHidden {
-                RoundedRectangle(cornerRadius: DesignSystem.Radius.control)
-                    .fill(DesignSystem.Glass.activeTint)
+                Capsule().fill(DesignSystem.Glass.activeTint)
             }
         }
-        .glassHoverHighlight(in: RoundedRectangle(cornerRadius: DesignSystem.Radius.control))
+        .glassHoverHighlight(in: Capsule())
     }
 }
 
